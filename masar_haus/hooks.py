@@ -43,7 +43,7 @@ app_license = "mit"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+doctype_js = {"Opportunity" : "custom/opportunity/opportunity.js"}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -255,7 +255,10 @@ fixtures = [
             "name", "in", [
                 "Customer-custom_company_group",
                 "Customer-custom_customer_rating",
-                "Contact-custom_country"
+                "Contact-custom_country",
+                "Opportunity-custom_pursuit_team",
+                "Opportunity-custom_item_group",
+                "Opportunity-custom_project_description"
             ]
         ]
     ]}
