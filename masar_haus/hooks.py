@@ -137,13 +137,11 @@ doctype_js = {"Opportunity" : "custom/opportunity/opportunity.js"}
 # ---------------
 # Hook on document methods and events
 
-# doc_events = {
-# 	"*": {
-# 		"on_update": "method",
-# 		"on_cancel": "method",
-# 		"on_trash": "method"
-# 	}
-# }
+doc_events = {
+	"Opportunity": {
+		"on_update": "masar_haus.custom.opportunity.opportunity.on_update"
+	}
+}
 
 # Scheduled Tasks
 # ---------------
