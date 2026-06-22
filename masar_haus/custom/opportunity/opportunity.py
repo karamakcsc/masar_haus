@@ -73,6 +73,9 @@ def create_customer(doc):
 
         customer_doc.flags.ignore_permissions = True
         customer_doc.insert()
+        
+        if doc.opportunity_from == "Prospect" and frappe.db.exists("Prospect", doc.party_name):
+            frappe.db.set_value("Prospect", doc.party_name, "custom_customer", customer_doc.name, update_modified=False)
 
         frappe.msgprint(
             _("Customer {0} created successfully.").format(
