@@ -137,6 +137,8 @@ doctype_js = {"Opportunity" : "custom/opportunity/opportunity.js"}
 # ---------------
 # Hook on document methods and events
 
+boot_session = "masar_haus.boot.remap_crm_sidebar"
+
 doc_events = {
 	"Opportunity": {
 		"on_update": "masar_haus.custom.opportunity.opportunity.on_update"
@@ -260,5 +262,12 @@ fixtures = [
                 "Prospect-custom_customer"
             ]
         ]
-    ]}
+    ]},
+    {"dt": "Dashboard Chart Source", "filters": [["module", "=", "Masar Haus"]]},
+    {"dt": "Number Card",            "filters": [["module", "=", "Masar Haus"]]},
+    {"dt": "Dashboard Chart",        "filters": [["module", "=", "Masar Haus"]]},
+    {"dt": "Dashboard",              "filters": [["module", "=", "Masar Haus"]]},
+    {"dt": "Workspace Sidebar",      "filters": [["name", "in", ["CH CRM"]]]},
+    {"dt": "Workspace",              "filters": [["name", "in", ["CRM"]]]},
+    {"dt": "Desktop Icon",           "filters": [["name", "in", ["CRM"]]]},
 ]

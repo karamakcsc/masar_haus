@@ -1,0 +1,38 @@
+[
+ {
+  "docstatus": 0,
+  "doctype": "Dashboard Chart Source",
+  "modified": "2026-06-25 16:01:01.157375",
+  "module": "Masar Haus",
+  "name": "Opportunity CF Status",
+  "source_name": "Opportunity CF Status",
+  "timeseries": 0
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Dashboard Chart Source",
+  "modified": "2026-06-25 16:01:01.161014",
+  "module": "Masar Haus",
+  "name": "Opportunity GRC Status",
+  "source_name": "Opportunity GRC Status",
+  "timeseries": 0
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Dashboard Chart Source",
+  "modified": "2026-06-25 16:01:01.163779",
+  "module": "Masar Haus",
+  "name": "Opportunity Monthly Live",
+  "source_name": "Opportunity Monthly Live",
+  "timeseries": 0
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Dashboard Chart Source",
+  "modified": "2026-06-25 16:01:01.166515",
+  "module": "Masar Haus",
+  "name": "Opportunity Pipeline",
+  "source_name": "Opportunity Pipeline",
+  "timeseries": 0
+ }
+]

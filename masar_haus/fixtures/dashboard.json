@@ -1,0 +1,45 @@
+[
+ {
+  "cards": [
+   {
+    "card": "CF — Live Opportunities"
+   },
+   {
+    "card": "GRC — Live Opportunities"
+   },
+   {
+    "card": "CF — Won Opportunities"
+   },
+   {
+    "card": "GRC — Won Opportunities"
+   }
+  ],
+  "chart_options": null,
+  "charts": [
+   {
+    "chart": "CF Opportunity Value by Status",
+    "width": "Half"
+   },
+   {
+    "chart": "GRC Opportunity Value by Status",
+    "width": "Half"
+   },
+   {
+    "chart": "Monthly Live Opportunity Value",
+    "width": "Full"
+   },
+   {
+    "chart": "Opportunity Pipeline by Sales Stage",
+    "width": "Full"
+   }
+  ],
+  "dashboard_name": "Opportunity Dashboard",
+  "docstatus": 0,
+  "doctype": "Dashboard",
+  "is_default": 0,
+  "is_standard": 0,
+  "modified": "2026-06-25 16:01:01.104089",
+  "module": "Masar Haus",
+  "name": "Opportunity Dashboard"
+ }
+]
