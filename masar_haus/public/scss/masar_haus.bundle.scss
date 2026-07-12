@@ -1,0 +1,31 @@
+/* Opportunity Dashboard: lay the number cards out as a 3-column x 2-row grid
+   -- column 1 is the Total card, columns 2/3 are CF/GRC, row 1 is Live and
+   row 2 is Won. Scoped via :has() so it only affects this dashboard's grid. */
+.widget-group-body.grid-col-3:has(.widget[data-widget-name="Total — Live Opportunities"]) {
+	grid-template-columns: repeat(3, minmax(160px, 1fr));
+}
+
+.widget[data-widget-name="Total — Live Opportunities"] {
+	grid-row: 1;
+	grid-column: 1;
+}
+.widget[data-widget-name="CF — Live Opportunities"] {
+	grid-row: 1;
+	grid-column: 2;
+}
+.widget[data-widget-name="GRC — Live Opportunities"] {
+	grid-row: 1;
+	grid-column: 3;
+}
+.widget[data-widget-name="Total — Won Opportunities"] {
+	grid-row: 2;
+	grid-column: 1;
+}
+.widget[data-widget-name="CF — Won Opportunities"] {
+	grid-row: 2;
+	grid-column: 2;
+}
+.widget[data-widget-name="GRC — Won Opportunities"] {
+	grid-row: 2;
+	grid-column: 3;
+}

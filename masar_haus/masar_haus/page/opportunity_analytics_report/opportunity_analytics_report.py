@@ -244,6 +244,36 @@ def get_nc_grc_won(filters=None, **kwargs):
 		},
 	}
 
+@frappe.whitelist()
+def get_nc_total_live(filters=None, **kwargs):
+	count = frappe.db.count("Opportunity", {
+		"custom_item_group": ["in", ["Corporate Finance", "Corporate Governance"]],
+		"status": ["in", ["Open", "Quotation"]],
+	})
+	return {
+		"value": count,
+		"route": ["List", "Opportunity", "List"],
+		"route_options": {
+			"custom_item_group": ["in", "Corporate Finance,Corporate Governance"],
+			"status": ["in", "Open,Quotation"],
+		},
+	}
+
+@frappe.whitelist()
+def get_nc_total_won(filters=None, **kwargs):
+	count = frappe.db.count("Opportunity", {
+		"custom_item_group": ["in", ["Corporate Finance", "Corporate Governance"]],
+		"status": ["in", ["Converted", "Closed"]],
+	})
+	return {
+		"value": count,
+		"route": ["List", "Opportunity", "List"],
+		"route_options": {
+			"custom_item_group": ["in", "Corporate Finance,Corporate Governance"],
+			"status": ["in", "Converted,Closed"],
+		},
+	}
+
 
 # ── Frappe Dashboard: Chart Source methods ────────────────────────────────────
 
@@ -308,11 +338,20 @@ def get_chart_monthly(chart_name=None, filters=None, **kwargs):
 	months = sorted({r.month for r in rows})
 	cf_d  = {r.month: float(r.val) for r in rows if r.custom_item_group == "Corporate Finance"}
 	grc_d = {r.month: float(r.val) for r in rows if r.custom_item_group == "Corporate Governance"}
+
+	cf_vals, grc_vals = [], []
+	cf_running = grc_running = 0.0
+	for m in months:
+		cf_running += cf_d.get(m, 0.0)
+		grc_running += grc_d.get(m, 0.0)
+		cf_vals.append(cf_running)
+		grc_vals.append(grc_running)
+
 	return {
 		"labels": months,
 		"datasets": [
-			{"name": "Corporate Finance",    "values": [cf_d.get(m, 0.0)  for m in months]},
-			{"name": "Corporate Governance", "values": [grc_d.get(m, 0.0) for m in months]},
+			{"name": "Corporate Finance",    "values": cf_vals},
+			{"name": "Corporate Governance", "values": grc_vals},
 		],
 	}
 
