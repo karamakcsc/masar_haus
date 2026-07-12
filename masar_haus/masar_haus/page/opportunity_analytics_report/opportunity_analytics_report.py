@@ -131,8 +131,7 @@ def _agg(rows, groups, statuses):
 	return cnt, val
 
 
-def _win_pct(won, lost):
-	total = won + lost
+def _win_pct(won, total):
 	return round(won / total * 100, 1) if total > 0 else 0.0
 
 
@@ -147,9 +146,23 @@ def _build_summary(rows):
 		won_n, won_v = _agg(rows, groups, WON)
 		live_n, live_v = _agg(rows, groups, LIVE)
 		lost_n, lost_v = _agg(rows, groups, LOST)
+		total_n = won_n + live_n + lost_n
+		total_v = won_v + live_v + lost_v
 		result[key] = {
-			"numbers": {"won": won_n, "live": live_n, "win_pct": _win_pct(won_n, lost_n)},
-			"values": {"won": won_v, "live": live_v, "win_pct": _win_pct(won_v, lost_v)},
+			"numbers": {
+				"total": total_n,
+				"won": won_n,
+				"live": live_n,
+				"lost": lost_n,
+				"win_pct": _win_pct(won_n, total_n),
+			},
+			"values": {
+				"total": total_v,
+				"won": won_v,
+				"live": live_v,
+				"lost": lost_v,
+				"win_pct": _win_pct(won_v, total_v),
+			},
 		}
 	return result
 
@@ -172,8 +185,15 @@ def _build_bar(rows):
 			continue
 		bucket = cf if r.custom_item_group == "Corporate Finance" else grc
 		bucket[r.month] = bucket.get(r.month, 0.0) + float(r.val)
-	cf_vals = [cf.get(m, 0.0) for m in months]
-	grc_vals = [grc.get(m, 0.0) for m in months]
+
+	cf_vals, grc_vals = [], []
+	cf_running = grc_running = 0.0
+	for m in months:
+		cf_running += cf.get(m, 0.0)
+		grc_running += grc.get(m, 0.0)
+		cf_vals.append(cf_running)
+		grc_vals.append(grc_running)
+
 	return {
 		"months": months,
 		"cf": cf_vals,

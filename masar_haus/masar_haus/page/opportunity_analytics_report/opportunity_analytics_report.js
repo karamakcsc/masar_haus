@@ -29,7 +29,7 @@
 	}
 
 	// ── CSS ─────────────────────────────────────────────────────────────────────
-	var CSS_ID = "opp-db-styles-v3";
+	var CSS_ID = "opp-db-styles-v4";
 	function injectStyles() {
 		if (document.getElementById(CSS_ID)) return;
 		var el = document.createElement("style");
@@ -97,12 +97,16 @@
 }
 .opp-metric-row { display: flex; gap: 8px; }
 .opp-metric { flex: 1; text-align: center; padding: 10px 6px; border-radius: 8px; }
+.opp-metric.total { background: #eef2ff; }
 .opp-metric.won  { background: #f0fdf4; }
 .opp-metric.live { background: #eff6ff; }
+.opp-metric.lost { background: #fef2f2; }
 .opp-metric.pct  { background: #fefce8; }
 .opp-metric .mv  { font-size: 20px; font-weight: 800; line-height: 1.2; }
+.opp-metric.total .mv { color: #4338ca; }
 .opp-metric.won  .mv { color: #15803d; }
 .opp-metric.live .mv { color: #1d4ed8; }
+.opp-metric.lost .mv { color: #b91c1c; }
 .opp-metric.pct  .mv { color: #b45309; }
 .opp-metric .ml  {
   font-size: 9px; font-weight: 600; text-transform: uppercase;
@@ -190,9 +194,9 @@
 	// ── Summary cards ───────────────────────────────────────────────────────────
 	function buildSummaryHTML(summary) {
 		var panels = [
+			{ key: "total", label: "Total — CF + GRC" },
 			{ key: "CF",    label: "Corporate Finance (CF)" },
 			{ key: "GRC",   label: "Corporate Governance (GRC)" },
-			{ key: "total", label: "Total — CF + GRC" },
 		];
 		return (
 			'<div class="opp-grid-3">' +
@@ -203,14 +207,18 @@
 					'<div class="opp-panel-title">' + p.label + "</div>" +
 					'<div class="opp-metric-group-title">Number of Opportunities</div>' +
 					'<div class="opp-metric-row">' +
+					_metric("total", s.numbers.total,       "Total") +
 					_metric("won",  s.numbers.won,         "Won") +
 					_metric("live", s.numbers.live,        "Live") +
+					_metric("lost", s.numbers.lost,        "Lost") +
 					_metric("pct",  s.numbers.win_pct + "%","Win Rate") +
 					"</div>" +
 					'<div class="opp-metric-group-title" style="margin-top:16px">Value of Opportunities (QAR)</div>' +
 					'<div class="opp-metric-row">' +
+					_metric("total", fmtCompact(s.values.total),      "Total") +
 					_metric("won",  fmtCompact(s.values.won),         "Won") +
 					_metric("live", fmtCompact(s.values.live),        "Live") +
+					_metric("lost", fmtCompact(s.values.lost),        "Lost") +
 					_metric("pct",  s.values.win_pct + "%",           "Win Rate") +
 					"</div>" +
 					"</div>"
@@ -326,14 +334,62 @@
 	}
 
 	// ── Pipeline chart (stacked horizontal bar) ─────────────────────────────────
+	var pipelineValueLabelsPlugin = {
+		id: "pipelineValueLabels",
+		afterDatasetsDraw: function (chart) {
+			var ctx = chart.ctx;
+			var datasets = chart.data.datasets;
+			var topY = {}; // index -> smallest (topmost) y seen across datasets
+			var totals = {}; // index -> sum of all dataset values
+
+			datasets.forEach(function (dataset, dsIndex) {
+				var meta = chart.getDatasetMeta(dsIndex);
+				if (meta.hidden) return;
+				meta.data.forEach(function (bar, index) {
+					var value = dataset.data[index] || 0;
+					var props = bar.getProps(["x", "y", "base"], true);
+
+					totals[index] = (totals[index] || 0) + value;
+					if (topY[index] === undefined || props.y < topY[index]) {
+						topY[index] = props.y;
+					}
+
+					var segHeight = Math.abs(props.base - props.y);
+					if (!value || segHeight < 14) return; // skip labels on segments too small to hold text
+					ctx.save();
+					ctx.fillStyle = "#fff";
+					ctx.font = "bold 10px 'Inter', Arial, sans-serif";
+					ctx.textAlign = "center";
+					ctx.textBaseline = "middle";
+					ctx.fillText(fmtCompact(value), props.x, (props.y + props.base) / 2);
+					ctx.restore();
+				});
+			});
+
+			// Total, bold, above each full stacked bar
+			var firstMeta = chart.getDatasetMeta(0);
+			firstMeta.data.forEach(function (bar, index) {
+				var total = totals[index];
+				if (!total) return;
+				var props = bar.getProps(["x"], true);
+				ctx.save();
+				ctx.fillStyle = "#1f2937";
+				ctx.font = "bold 12px 'Inter', Arial, sans-serif";
+				ctx.textAlign = "center";
+				ctx.textBaseline = "bottom";
+				ctx.fillText(fmtCompact(total), props.x, topY[index] - 6);
+				ctx.restore();
+			});
+		},
+	};
+
 	function renderPipelineChart(pipeline) {
 		var canvas = document.getElementById("opp-pipeline-chart");
 		if (!canvas || !pipeline || pipeline.length === 0) return;
 
-		// Reverse so largest is at top (Chart.js renders bottom-to-top for horizontal)
-		var sorted = pipeline.slice().reverse();
+		var sorted = pipeline; // already sorted largest-first by the backend
 		var labels = sorted.map(function (p) {
-			return p.stage.length > 30 ? p.stage.substring(0, 28) + "…" : p.stage;
+			return p.stage.length > 20 ? p.stage.substring(0, 18) + "…" : p.stage;
 		});
 		var cfVals   = sorted.map(function (p) { return p.cf_val; });
 		var grcVals  = sorted.map(function (p) { return p.grc_val; });
@@ -341,12 +397,14 @@
 
 		new Chart(canvas, {
 			type: "bar",
+			plugins: [pipelineValueLabelsPlugin],
 			data: {
 				labels: labels,
 				datasets: [
 					{
 						label: "Corporate Finance",
 						data: cfVals,
+						stack: "pipeline",
 						backgroundColor: "rgba(59,130,246,.75)",
 						borderColor: "#3b82f6",
 						borderWidth: 1,
@@ -355,6 +413,7 @@
 					{
 						label: "Corporate Governance",
 						data: grcVals,
+						stack: "pipeline",
 						backgroundColor: "rgba(124,58,237,.75)",
 						borderColor: "#7c3aed",
 						borderWidth: 1,
@@ -363,9 +422,9 @@
 				],
 			},
 			options: {
-				indexAxis: "y",
 				responsive: true,
 				maintainAspectRatio: false,
+				layout: { padding: { top: 24 } },
 				plugins: {
 					legend: {
 						position: "bottom",
@@ -390,17 +449,17 @@
 				scales: {
 					x: {
 						stacked: true,
+						ticks: { font: { size: 11 } },
+						grid: { display: false },
+					},
+					y: {
+						stacked: true,
 						beginAtZero: true,
 						ticks: {
 							callback: function (v) { return "QAR " + fmtCompact(v); },
 							font: { size: 11 },
 						},
 						grid: { color: "#f3f4f6" },
-					},
-					y: {
-						stacked: true,
-						ticks: { font: { size: 11 } },
-						grid: { display: false },
 					},
 				},
 			},
@@ -476,7 +535,7 @@
 		// Height must be in the HTML at DOM-insertion time; setting it via JS after the fact
 		// does not trigger a layout reflow before Chart.js reads the canvas dimensions.
 		var pipelineItems = data.pipeline || [];
-		var pipelineH     = Math.max(300, (pipelineItems.length * 46)) + "px";
+		var pipelineH     = "380px";
 		var pipelineTotal = pipelineItems.reduce(function (s, p) { return s + p.total_cnt; }, 0);
 
 		var html =
