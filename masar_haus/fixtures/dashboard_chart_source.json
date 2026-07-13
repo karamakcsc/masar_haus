@@ -34,5 +34,14 @@
   "name": "Opportunity Pipeline",
   "source_name": "Opportunity Pipeline",
   "timeseries": 0
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Dashboard Chart Source",
+  "modified": "2026-07-13 11:02:49.232873",
+  "module": "Masar Haus",
+  "name": "Opportunity Total Status",
+  "source_name": "Opportunity Total Status",
+  "timeseries": 0
  }
 ]

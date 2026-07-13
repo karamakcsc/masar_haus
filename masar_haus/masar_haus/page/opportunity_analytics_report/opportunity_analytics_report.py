@@ -5,7 +5,7 @@ LIVE = ("Open", "Quotation")
 LOST = ("Lost",)
 
 
-def _build_where(territory=None, sales_stage=None):
+def _build_where(territory=None, sales_stage=None, sales_stage_1=None):
 	"""Return (where_clause, params_tuple) for dynamic filtering."""
 	conditions = ["custom_item_group IN ('Corporate Finance', 'Corporate Governance')"]
 	params = []
@@ -17,6 +17,10 @@ def _build_where(territory=None, sales_stage=None):
 	if sales_stage and sales_stage != "all":
 		conditions.append("sales_stage = %s")
 		params.append(sales_stage)
+
+	if sales_stage_1 and sales_stage_1 != "all":
+		conditions.append("custom_sales_stage_1 = %s")
+		params.append(sales_stage_1)
 
 	return " AND ".join(conditions), tuple(params)
 
@@ -41,15 +45,25 @@ def get_filter_options():
 		ORDER BY sales_stage
 		""",
 	)
+	stages_1 = frappe.db.sql(
+		"""
+		SELECT DISTINCT custom_sales_stage_1
+		FROM tabOpportunity
+		WHERE custom_item_group IN ('Corporate Finance', 'Corporate Governance')
+		  AND custom_sales_stage_1 IS NOT NULL AND custom_sales_stage_1 != ''
+		ORDER BY custom_sales_stage_1
+		""",
+	)
 	return {
 		"territories": [r[0] for r in territories],
 		"sales_stages": [r[0] for r in stages],
+		"sales_stages_1": [r[0] for r in stages_1],
 	}
 
 
 @frappe.whitelist()
-def get_dashboard_data(territory="all", sales_stage="all"):
-	where, params = _build_where(territory, sales_stage)
+def get_dashboard_data(territory="all", sales_stage="all", sales_stage_1="all"):
+	where, params = _build_where(territory, sales_stage, sales_stage_1)
 
 	# Main aggregation — avoids DATE_FORMAT to sidestep % escaping with params
 	rows = frappe.db.sql(
@@ -169,10 +183,15 @@ def _build_summary(rows):
 
 def _build_doughnut(rows):
 	result = {}
-	for key, grp in (("CF", "Corporate Finance"), ("GRC", "Corporate Governance")):
-		_, won = _agg(rows, [grp], WON)
-		_, live = _agg(rows, [grp], LIVE)
-		_, lost = _agg(rows, [grp], LOST)
+	specs = (
+		("total", ["Corporate Finance", "Corporate Governance"]),
+		("CF",    ["Corporate Finance"]),
+		("GRC",   ["Corporate Governance"]),
+	)
+	for key, groups in specs:
+		_, won = _agg(rows, groups, WON)
+		_, live = _agg(rows, groups, LIVE)
+		_, lost = _agg(rows, groups, LOST)
 		result[key] = {"won": won, "live": live, "lost": lost}
 	return result
 
@@ -335,6 +354,20 @@ def get_chart_grc_status(chart_name=None, filters=None, **kwargs):
 	rows = frappe.db.sql(
 		"SELECT status, COALESCE(SUM(opportunity_amount),0) AS val "
 		"FROM tabOpportunity WHERE custom_item_group='Corporate Governance'" + extra + " GROUP BY status",
+		params, as_dict=True,
+	)
+	won  = float(sum(r.val for r in rows if r.status in WON))
+	live = float(sum(r.val for r in rows if r.status in LIVE))
+	lost = float(sum(r.val for r in rows if r.status in LOST))
+	return {"labels": ["Won", "Live / Ongoing", "Lost"], "datasets": [{"values": [won, live, lost]}]}
+
+@frappe.whitelist()
+def get_chart_total_status(chart_name=None, filters=None, **kwargs):
+	ter, stage = _parse_chart_filters(filters)
+	extra, params = _build_chart_where(ter, stage)
+	rows = frappe.db.sql(
+		"SELECT status, COALESCE(SUM(opportunity_amount),0) AS val "
+		"FROM tabOpportunity WHERE custom_item_group IN ('Corporate Finance','Corporate Governance')" + extra + " GROUP BY status",
 		params, as_dict=True,
 	)
 	won  = float(sum(r.val for r in rows if r.status in WON))

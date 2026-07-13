@@ -160,12 +160,19 @@
 				return '<option value="' + s.replace(/"/g, "&quot;") + '">' + s + '</option>';
 			}).join("");
 
+		var stage1Opts = '<option value="all">All Sales Stage 1</option>' +
+			(opts.sales_stages_1 || []).map(function (s) {
+				return '<option value="' + s.replace(/"/g, "&quot;") + '">' + s + '</option>';
+			}).join("");
+
 		return (
 			'<div class="opp-filter-bar">' +
 			'<div class="opp-filter-item"><label>Territory</label>' +
 			'<select id="opp-f-territory" class="opp-select">' + territoryOpts + '</select></div>' +
 			'<div class="opp-filter-item"><label>Sales Stage</label>' +
 			'<select id="opp-f-stage" class="opp-select">' + stageOpts + '</select></div>' +
+			'<div class="opp-filter-item"><label>Sales Stage 1</label>' +
+			'<select id="opp-f-stage1" class="opp-select">' + stage1Opts + '</select></div>' +
 			'<button class="opp-filter-clear" id="opp-f-clear">Clear Filters</button>' +
 			'<div class="opp-filter-chips" id="opp-filter-chips"></div>' +
 			'</div>'
@@ -178,13 +185,14 @@
 		var parts = [];
 		if (filters.territory !== "all") parts.push(filters.territory);
 		if (filters.sales_stage !== "all") parts.push(filters.sales_stage);
+		if (filters.sales_stage_1 !== "all") parts.push(filters.sales_stage_1);
 		chips.innerHTML = parts.map(function (p) {
 			return '<span class="opp-chip">' + p + '</span>';
 		}).join("");
 	}
 
 	function markActiveSelects(filters) {
-		["opp-f-territory", "opp-f-stage"].forEach(function (id) {
+		["opp-f-territory", "opp-f-stage", "opp-f-stage1"].forEach(function (id) {
 			var el = document.getElementById(id);
 			if (!el) return;
 			el.classList.toggle("active", el.value !== "all");
@@ -479,6 +487,35 @@
 		GRC:   "Corporate Governance — Live",
 	};
 
+	var barValueLabelsPlugin = {
+		id: "barValueLabels",
+		afterDatasetsDraw: function (chart) {
+			var ctx = chart.ctx;
+			var meta = chart.getDatasetMeta(0);
+			var dataset = chart.data.datasets[0];
+			meta.data.forEach(function (bar, index) {
+				var value = dataset.data[index];
+				if (!value) return;
+				var props = bar.getProps(["x", "y", "base"], true);
+				var barHeight = Math.abs(props.base - props.y);
+				var formatted = fmtNum(value);
+				ctx.save();
+				ctx.font = "bold 12px 'Inter', Arial, sans-serif";
+				ctx.textAlign = "center";
+				if (barHeight > 24) {
+					ctx.fillStyle = "#fff";
+					ctx.textBaseline = "top";
+					ctx.fillText(formatted, props.x, props.y + 8);
+				} else {
+					ctx.fillStyle = "#1f2937";
+					ctx.textBaseline = "bottom";
+					ctx.fillText(formatted, props.x, props.y - 4);
+				}
+				ctx.restore();
+			});
+		},
+	};
+
 	function renderBarChart(barData, filter) {
 		if (_barChart) { _barChart.destroy(); _barChart = null; }
 		var canvas = document.getElementById("opp-bar-chart");
@@ -490,6 +527,7 @@
 
 		_barChart = new Chart(canvas, {
 			type: "bar",
+			plugins: [barValueLabelsPlugin],
 			data: {
 				labels: months,
 				datasets: [{
@@ -505,6 +543,7 @@
 			options: {
 				responsive: true,
 				maintainAspectRatio: false,
+				layout: { padding: { top: 20 } },
 				plugins: {
 					legend: { display: false },
 					tooltip: {
@@ -567,7 +606,9 @@
 
 			// Doughnuts
 			'<h3 class="sec-title">Opportunity Value by Status</h3>' +
-			'<div class="opp-grid-2">' +
+			'<div class="opp-grid-3">' +
+			'<div class="opp-panel"><div class="opp-panel-title">Total — CF + GRC</div>' +
+			'<div style="position:relative;height:290px"><canvas id="doughnut-total"></canvas></div></div>' +
 			'<div class="opp-panel"><div class="opp-panel-title">Corporate Finance (CF)</div>' +
 			'<div style="position:relative;height:290px"><canvas id="doughnut-CF"></canvas></div></div>' +
 			'<div class="opp-panel"><div class="opp-panel-title">Corporate Governance (GRC)</div>' +
@@ -591,6 +632,7 @@
 		$body.html(html);
 
 		loadChartJs(function () {
+			renderDoughnut("doughnut-total", data.doughnut.total);
 			renderDoughnut("doughnut-CF",  data.doughnut.CF);
 			renderDoughnut("doughnut-GRC", data.doughnut.GRC);
 			renderPipelineChart(data.pipeline);
@@ -616,7 +658,7 @@
 		page.add_action_item(__("Refresh"), function () { loadData(); });
 
 		var $body    = $(wrapper).find(".layout-main-section");
-		var filters  = { territory: "all", sales_stage: "all" };
+		var filters  = { territory: "all", sales_stage: "all", sales_stage_1: "all" };
 		var filterBarHTML = ""; // built after get_filter_options
 
 		function applyFilters() {
@@ -626,9 +668,10 @@
 		}
 
 		function bindFilterListeners() {
-			var terSel   = document.getElementById("opp-f-territory");
-			var stageSel = document.getElementById("opp-f-stage");
-			var clearBtn = document.getElementById("opp-f-clear");
+			var terSel    = document.getElementById("opp-f-territory");
+			var stageSel  = document.getElementById("opp-f-stage");
+			var stage1Sel = document.getElementById("opp-f-stage1");
+			var clearBtn  = document.getElementById("opp-f-clear");
 
 			if (terSel) {
 				terSel.value = filters.territory;
@@ -644,12 +687,21 @@
 					applyFilters();
 				});
 			}
+			if (stage1Sel) {
+				stage1Sel.value = filters.sales_stage_1;
+				stage1Sel.addEventListener("change", function () {
+					filters.sales_stage_1 = this.value;
+					applyFilters();
+				});
+			}
 			if (clearBtn) {
 				clearBtn.addEventListener("click", function () {
-					filters.territory   = "all";
-					filters.sales_stage = "all";
-					if (terSel)   { terSel.value   = "all"; terSel.classList.remove("active"); }
-					if (stageSel) { stageSel.value = "all"; stageSel.classList.remove("active"); }
+					filters.territory     = "all";
+					filters.sales_stage   = "all";
+					filters.sales_stage_1 = "all";
+					if (terSel)    { terSel.value    = "all"; terSel.classList.remove("active"); }
+					if (stageSel)  { stageSel.value  = "all"; stageSel.classList.remove("active"); }
+					if (stage1Sel) { stage1Sel.value = "all"; stage1Sel.classList.remove("active"); }
 					applyFilters();
 				});
 			}
@@ -674,7 +726,11 @@
 
 			frappe.call({
 				method: "masar_haus.masar_haus.page.opportunity_analytics_report.opportunity_analytics_report.get_dashboard_data",
-				args: { territory: filters.territory, sales_stage: filters.sales_stage },
+				args: {
+					territory: filters.territory,
+					sales_stage: filters.sales_stage,
+					sales_stage_1: filters.sales_stage_1,
+				},
 				callback: function (r) {
 					if (!r.message) return;
 					renderDashboard($body, r.message, filterBarHTML);

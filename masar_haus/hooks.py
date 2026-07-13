@@ -259,7 +259,8 @@ fixtures = [
                 "Opportunity-custom_pursuit_team",
                 "Opportunity-custom_item_group",
                 "Opportunity-custom_project_description",
-                "Prospect-custom_customer"
+                "Prospect-custom_customer",
+                "Opportunity-custom_sales_stage_1"
             ]
         ]
     ]},

@@ -23,6 +23,10 @@
   "chart_options": null,
   "charts": [
    {
+    "chart": "Total Opportunity Value by Status",
+    "width": "Half"
+   },
+   {
     "chart": "CF Opportunity Value by Status",
     "width": "Half"
    },

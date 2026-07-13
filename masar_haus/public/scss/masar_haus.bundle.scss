@@ -29,3 +29,30 @@
 	grid-row: 2;
 	grid-column: 3;
 }
+
+/* Opportunity Dashboard: put the 3 "Opportunity Value by Status" donut charts
+   side by side on one row within the charts grid (normally 2 columns).
+   data-chart-title is set at runtime by masar_haus.bundle.js -- chart widgets'
+   data-widget-name attribute is unreliable (see that file for why). */
+.widget-group-body.grid-col-2:has(.widget[data-chart-title="Total Opportunity Value by Status"]) {
+	grid-template-columns: repeat(3, minmax(200px, 1fr));
+
+	/* Monthly/Pipeline charts use the stock "Full" width class, which is
+	   hardcoded to span 2 columns -- stretch it to span all 3 here instead. */
+	.full-width {
+		grid-column: 1 / -1;
+	}
+}
+
+.widget[data-chart-title="Total Opportunity Value by Status"] {
+	grid-row: 1;
+	grid-column: 1;
+}
+.widget[data-chart-title="CF Opportunity Value by Status"] {
+	grid-row: 1;
+	grid-column: 2;
+}
+.widget[data-chart-title="GRC Opportunity Value by Status"] {
+	grid-row: 1;
+	grid-column: 3;
+}
