@@ -313,6 +313,51 @@ def get_nc_total_won(filters=None, **kwargs):
 		},
 	}
 
+@frappe.whitelist()
+def get_nc_cf_lost(filters=None, **kwargs):
+	count = frappe.db.count("Opportunity", {
+		"custom_item_group": "Corporate Finance",
+		"status": ["in", ["Lost"]],
+	})
+	return {
+		"value": count,
+		"route": ["List", "Opportunity", "List"],
+		"route_options": {
+			"custom_item_group": "Corporate Finance",
+			"status": ["in", "Lost"],
+		},
+	}
+
+@frappe.whitelist()
+def get_nc_grc_lost(filters=None, **kwargs):
+	count = frappe.db.count("Opportunity", {
+		"custom_item_group": "Corporate Governance",
+		"status": ["in", ["Lost"]],
+	})
+	return {
+		"value": count,
+		"route": ["List", "Opportunity", "List"],
+		"route_options": {
+			"custom_item_group": "Corporate Governance",
+			"status": ["in", "Lost"],
+		},
+	}
+
+@frappe.whitelist()
+def get_nc_total_lost(filters=None, **kwargs):
+	count = frappe.db.count("Opportunity", {
+		"custom_item_group": ["in", ["Corporate Finance", "Corporate Governance"]],
+		"status": ["in", ["Lost"]],
+	})
+	return {
+		"value": count,
+		"route": ["List", "Opportunity", "List"],
+		"route_options": {
+			"custom_item_group": ["in", "Corporate Finance,Corporate Governance"],
+			"status": ["in", "Lost"],
+		},
+	}
+
 
 # ── Frappe Dashboard: Chart Source methods ────────────────────────────────────
 

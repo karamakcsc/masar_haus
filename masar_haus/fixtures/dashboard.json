@@ -18,6 +18,15 @@
    },
    {
     "card": "GRC — Won Opportunities"
+   },
+   {
+    "card": "Total — Lost Opportunities"
+   },
+   {
+    "card": "CF — Lost Opportunities"
+   },
+   {
+    "card": "GRC — Lost Opportunities"
    }
   ],
   "chart_options": null,

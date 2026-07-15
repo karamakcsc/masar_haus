@@ -1,6 +1,7 @@
-/* Opportunity Dashboard: lay the number cards out as a 3-column x 2-row grid
-   -- column 1 is the Total card, columns 2/3 are CF/GRC, row 1 is Live and
-   row 2 is Won. Scoped via :has() so it only affects this dashboard's grid. */
+/* Opportunity Dashboard: lay the number cards out as a 3-column x 3-row grid
+   -- column 1 is the Total card, columns 2/3 are CF/GRC, row 1 is Live,
+   row 2 is Won, row 3 is Lost. Scoped via :has() so it only affects this
+   dashboard's grid. */
 .widget-group-body.grid-col-3:has(.widget[data-widget-name="Total — Live Opportunities"]) {
 	grid-template-columns: repeat(3, minmax(160px, 1fr));
 }
@@ -29,6 +30,18 @@
 	grid-row: 2;
 	grid-column: 3;
 }
+.widget[data-widget-name="Total — Lost Opportunities"] {
+	grid-row: 3;
+	grid-column: 1;
+}
+.widget[data-widget-name="CF — Lost Opportunities"] {
+	grid-row: 3;
+	grid-column: 2;
+}
+.widget[data-widget-name="GRC — Lost Opportunities"] {
+	grid-row: 3;
+	grid-column: 3;
+}
 
 /* Opportunity Dashboard: put the 3 "Opportunity Value by Status" donut charts
    side by side on one row within the charts grid (normally 2 columns).
@@ -55,4 +68,111 @@
 .widget[data-chart-title="GRC Opportunity Value by Status"] {
 	grid-row: 1;
 	grid-column: 3;
+}
+
+/* frappe-charts' Donut/Pie base measures use an asymmetric left/right padding
+   (30px vs 10px), so the ring itself always renders ~10px right of the true
+   container center -- barely visible in a wide 2-column card, obvious in our
+   narrower 3-across cards. Shift the draw area back to compensate. */
+.widget[data-chart-title$="Opportunity Value by Status"] .chart-draw-area {
+	transform: translateX(-10px);
+}
+
+/* Monthly/Pipeline bar charts: hide the y-axis (numbers + the horizontal
+   gridlines drawn alongside them, both part of the same ".y.axis" group) --
+   values are already shown directly on/above each bar. */
+.widget[data-chart-title="Monthly Live Opportunity Value"] svg .y.axis,
+.widget[data-chart-title="Opportunity Pipeline by Sales Stage"] svg .y.axis {
+	display: none;
+}
+
+/* Status donuts: replace frappe-charts' built-in horizontal legend (native
+   legend disabled via showLegend:0, see masar_haus.bundle.js) with our own
+   vertical legend, placed to the left of the ring. */
+.masar-donut-chart-wrapper {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 16px;
+}
+.masar-donut-chart-area {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+.masar-vertical-legend {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	flex: 0 0 auto;
+}
+.masar-legend-item {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 12px;
+	white-space: nowrap;
+}
+.masar-legend-dot {
+	width: 10px;
+	height: 10px;
+	border-radius: 2px;
+	flex-shrink: 0;
+}
+.masar-legend-label {
+	color: var(--text-muted, #6b7280);
+}
+.masar-legend-value {
+	font-weight: 600;
+	margin-left: auto;
+	padding-left: 10px;
+}
+
+/* Responsive: collapse the 3x3 number-card grid and the 3-across donut row
+   down to fewer columns on narrower screens instead of squeezing 3 columns
+   into too little space. Explicit row/column pins from above are reset to
+   `auto` so the grid's normal auto-placement can re-flow the cards. */
+@media (max-width: 900px) {
+	.widget-group-body.grid-col-3:has(.widget[data-widget-name="Total — Live Opportunities"]) {
+		grid-template-columns: repeat(2, minmax(140px, 1fr));
+	}
+	.widget-group-body.grid-col-2:has(.widget[data-chart-title="Total Opportunity Value by Status"]) {
+		grid-template-columns: repeat(2, minmax(180px, 1fr));
+	}
+	.widget[data-widget-name="Total — Live Opportunities"],
+	.widget[data-widget-name="CF — Live Opportunities"],
+	.widget[data-widget-name="GRC — Live Opportunities"],
+	.widget[data-widget-name="Total — Won Opportunities"],
+	.widget[data-widget-name="CF — Won Opportunities"],
+	.widget[data-widget-name="GRC — Won Opportunities"],
+	.widget[data-widget-name="Total — Lost Opportunities"],
+	.widget[data-widget-name="CF — Lost Opportunities"],
+	.widget[data-widget-name="GRC — Lost Opportunities"],
+	.widget[data-chart-title="Total Opportunity Value by Status"],
+	.widget[data-chart-title="CF Opportunity Value by Status"],
+	.widget[data-chart-title="GRC Opportunity Value by Status"] {
+		grid-row: auto;
+		grid-column: auto;
+	}
+}
+
+@media (max-width: 560px) {
+	.widget-group-body.grid-col-3:has(.widget[data-widget-name="Total — Live Opportunities"]),
+	.widget-group-body.grid-col-2:has(.widget[data-chart-title="Total Opportunity Value by Status"]) {
+		grid-template-columns: 1fr;
+	}
+
+	/* Cards are down to a single narrow column here -- legend-beside-ring no
+	   longer has room, so stack the legend below the ring instead. */
+	.masar-donut-chart-wrapper {
+		flex-direction: column;
+		align-items: stretch;
+	}
+	.masar-vertical-legend {
+		flex-direction: row;
+		flex-wrap: wrap;
+		justify-content: center;
+	}
+	.masar-legend-value {
+		margin-left: 0;
+	}
 }

@@ -29,13 +29,14 @@
 	}
 
 	// ── CSS ─────────────────────────────────────────────────────────────────────
-	var CSS_ID = "opp-db-styles-v4";
+	var CSS_ID = "opp-db-styles-v5";
 	function injectStyles() {
 		if (document.getElementById(CSS_ID)) return;
 		var el = document.createElement("style");
 		el.id = CSS_ID;
 		el.textContent = `
-.opp-db { padding: 4px 0 32px; }
+.opp-db { padding: 4px 20px 32px; }
+@media (max-width: 560px) { .opp-db { padding-left: 12px; padding-right: 12px; } }
 /* Filter bar */
 .opp-filter-bar {
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: 14px;
