@@ -78,6 +78,17 @@
 	transform: translateX(-10px);
 }
 
+/* CSS Grid items default to a content-based automatic minimum width. If
+   frappe-charts ever measures/draws this widget's SVG wider than its fair
+   1fr share of the 3-across grid (e.g. before layout has fully settled),
+   without this the grid TRACK itself grows to fit that SVG -- inflating the
+   whole card, not just the chart inside it (the .masar-donut-chart-area svg
+   max-width rule above only clamps the ring's own display size, it doesn't
+   stop the card/track around it from growing). */
+.widget[data-chart-title$="Opportunity Value by Status"] {
+	min-width: 0;
+}
+
 /* Monthly/Pipeline bar charts: hide the y-axis (numbers + the horizontal
    gridlines drawn alongside them, both part of the same ".y.axis" group) --
    values are already shown directly on/above each bar. */
@@ -88,16 +99,34 @@
 
 /* Status donuts: replace frappe-charts' built-in horizontal legend (native
    legend disabled via showLegend:0, see masar_haus.bundle.js) with our own
-   vertical legend, placed to the left of the ring. */
+   legend stacked above the ring.
+   This used to be a flex ROW with flex-wrap:wrap, letting the browser pick
+   side-by-side vs stacked based on available space -- diagnosed via
+   getBoundingClientRect() live on the dashboard: three donuts with the same
+   415px card width and equivalent content got DIFFERENT wrap outcomes
+   (two measured a 400px chart area, i.e. wrapped to their own full-width
+   line; the third measured 239px, i.e. stayed side-by-side sharing the row
+   with its legend) -- the wrap decision was not landing the same way for
+   every sibling despite matching conditions. Forcing column unconditionally
+   removes that decision entirely instead of chasing why it disagreed. */
 .masar-donut-chart-wrapper {
 	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
+	flex-direction: column;
+	align-items: stretch;
 	gap: 16px;
 }
 .masar-donut-chart-area {
-	flex: 1 1 auto;
-	min-width: 0;
+	/* Defensive clamp, independent of whatever pixel width frappe-charts
+	   measured this container as when it drew the ring (that measurement can
+	   land wrong if it runs before the 3-across grid/its column width has
+	   settled -- see masar_haus.bundle.js for the tagging fix targeting that
+	   directly). The SVG carries a viewBox, so constraining its display
+	   width and letting height follow keeps the ring's aspect ratio while
+	   guaranteeing it never visually exceeds its card. */
+	svg {
+		max-width: 100%;
+		height: auto;
+	}
 }
 .masar-vertical-legend {
 	display: flex;
@@ -161,12 +190,11 @@
 		grid-template-columns: 1fr;
 	}
 
-	/* Cards are down to a single narrow column here -- legend-beside-ring no
-	   longer has room, so stack the legend below the ring instead. */
-	.masar-donut-chart-wrapper {
-		flex-direction: column;
-		align-items: stretch;
-	}
+	/* Legend-above-ring is now the unconditional base layout (see
+	   .masar-donut-chart-wrapper above) -- at this width the legend ITEMS
+	   also switch from a vertical list to a wrapped horizontal row, since a
+	   single narrow column doesn't have room for both that stack and the
+	   ring comfortably. */
 	.masar-vertical-legend {
 		flex-direction: row;
 		flex-wrap: wrap;
@@ -175,4 +203,45 @@
 	.masar-legend-value {
 		margin-left: 0;
 	}
+
+	/* Center the now-shrunk donut ring (see is_mobile_width() height override
+	   in masar_haus.bundle.js) instead of letting it stretch the full card
+	   width, which would just re-introduce the oversized-ring problem.
+	   A definite width (not just max-width) is required here -- frappe-charts
+	   measures this element's clientWidth to size the SVG *before* the ring
+	   exists, so without a definite width it measures a still-empty, 0-wide
+	   box and draws a zero-width (invisible) chart. */
+	.masar-donut-chart-area {
+		width: 220px;
+		margin: 0 auto;
+	}
+
+	/* Monthly/Pipeline bar charts: frappe-charts truncates x-axis labels
+	   ("2026-05" -> "202 ...", "Prospecting" -> "Pr..") based on a max-chars
+	   budget it derives from the chart's own pixel width divided by category
+	   count -- font-size has no effect on that calculation, only real width
+	   does. ensure_scrollable_bar_chart() (masar_haus.bundle.js) gives the
+	   measured element real per-category width so labels mostly fit, wrapped
+	   in a horizontally-scrollable box for whatever doesn't.
+	   min-width:0 on the chart's own grid cell is required: CSS Grid items
+	   default to a content-based automatic minimum width, so without this
+	   the widened chart forces the whole grid cell (and with it the page)
+	   wider instead of staying put and scrolling internally. */
+	.widget[data-chart-title="Monthly Live Opportunity Value"],
+	.widget[data-chart-title="Opportunity Pipeline by Sales Stage"] {
+		min-width: 0;
+	}
+
+	/* Belt-and-suspenders: clip at the shared charts grid too, so if
+	   anything still escapes containment it's cropped here rather than
+	   widening the page. */
+	.widget-group-body.grid-col-2:has(.widget[data-chart-title="Total Opportunity Value by Status"]) {
+		overflow-x: hidden;
+	}
+}
+
+.masar-chart-scroll {
+	overflow-x: auto;
+	max-width: 100%;
+	-webkit-overflow-scrolling: touch;
 }

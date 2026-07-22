@@ -31,6 +31,48 @@
 		return ($title.find(".ellipsis").attr("title") || $title.text() || "").trim();
 	}
 
+	// The desktop 3-across grid for the donuts (masar_haus.bundle.scss) is
+	// driven by :has(.widget[data-chart-title="Total Opportunity Value by
+	// Status"]) -- but that attribute used to only get set from inside
+	// make_chart, which only runs once a chart's own AJAX call resolves. Each
+	// donut/bar chart loads independently, so whichever one's request landed
+	// first got measured while the grid was still its default (wider) shape;
+	// once "Total" arrived and the grid snapped to 3 columns, that chart's
+	// already-drawn, fixed-pixel-width SVG no longer fit its (now narrower)
+	// column and overflowed past the card edge.
+	//
+	// A widget's title renders into .widget-title synchronously when the
+	// widget itself is constructed (frappe/public/js/frappe/widgets/
+	// base_widget.js make_widget() -> set_title()), well before its chart
+	// data fetch even starts. Tagging from that instead removes the race:
+	// the grid is already 3 columns before any of these charts get measured.
+	const ALL_TAGGED_TITLES = new Set([...TARGET_CHARTS, ...BAR_LABEL_CHARTS]);
+
+	function tag_widget_from_title_el(title_el) {
+		const $title = $(title_el);
+		const text = ($title.find(".ellipsis").attr("title") || $title.text() || "").trim();
+		if (ALL_TAGGED_TITLES.has(text)) {
+			$title.closest(".widget").attr("data-chart-title", text);
+		}
+	}
+
+	function start_early_widget_tagging() {
+		document.querySelectorAll(".widget-title").forEach(tag_widget_from_title_el);
+
+		new MutationObserver(function (mutations) {
+			mutations.forEach(function (mutation) {
+				mutation.addedNodes.forEach(function (node) {
+					if (node.nodeType !== 1) return;
+					if (node.matches && node.matches(".widget-title")) {
+						tag_widget_from_title_el(node);
+					}
+					node.querySelectorAll &&
+						node.querySelectorAll(".widget-title").forEach(tag_widget_from_title_el);
+				});
+			});
+		}).observe(document.body, { childList: true, subtree: true });
+	}
+
 	// Abbreviate large values to millions (e.g. 17,963,177 -> "18M", 13,735,250
 	// -> "13.7M") for the donut legend/tooltip, which gets cramped on the
 	// narrower 3-across card layout.
@@ -89,6 +131,32 @@
 		});
 	}
 
+	// On phone-width screens the donut/legend stack goes full-card-width (see
+	// the ≤560px rule in masar_haus.bundle.scss), so the ring -- drawn at
+	// Frappe's fixed default height of 240px regardless of container width --
+	// ends up dominating the whole card with a lot of dead space beneath it.
+	// Shrink it there; wider layouts have room for the default size.
+	function is_mobile_width() {
+		return window.innerWidth <= 560;
+	}
+
+	// frappe-charts truncates x-axis labels based on a max-chars budget of
+	// (this.width / category_count) * 0.6 / 7 -- i.e. it's driven entirely by
+	// the chart's actual rendered pixel width, not by font-size. Give the
+	// measured wrapper real per-category width (130px, matching a
+	// comfortably-legible desktop bar) so frappe-charts computes a much
+	// larger budget and mostly stops truncating, then let the excess (on the
+	// 8-category Pipeline chart in particular) scroll horizontally instead
+	// of being squeezed back down to fit the phone screen.
+	function ensure_scrollable_bar_chart(wrapper, category_count) {
+		const $wrapper = $(wrapper);
+		const min_width = Math.max((category_count || 0) * 130, 300);
+		$wrapper.css("min-width", min_width + "px");
+		if (!$wrapper.parent().hasClass("masar-chart-scroll")) {
+			$wrapper.wrap('<div class="masar-chart-scroll"></div>');
+		}
+	}
+
 	function attach_bar_value_labels(wrapper, datasets) {
 		function fix_labels() {
 			const svg = wrapper.querySelector("svg");
@@ -134,6 +202,9 @@
 						formatTooltipY: (value) => format_millions(value),
 					},
 				});
+				if (is_mobile_width()) {
+					custom_options.height = 160;
+				}
 				if (custom_options.data) {
 					chart_parent = setup_donut_layout(wrapper, custom_options.data);
 				}
@@ -141,6 +212,9 @@
 
 			if (BAR_LABEL_CHARTS.has(widget_title)) {
 				custom_options = Object.assign({}, custom_options, { valuesOverPoints: true });
+				if (is_mobile_width() && custom_options.data && custom_options.data.labels) {
+					ensure_scrollable_bar_chart(wrapper, custom_options.data.labels.length);
+				}
 			}
 
 			const chart = original_make_chart.call(this, chart_parent, custom_options);
@@ -163,5 +237,11 @@
 	if (!patch_make_chart()) {
 		frappe.after_ajax && frappe.after_ajax(patch_make_chart);
 		$(document).on("app_ready", patch_make_chart);
+	}
+
+	if (document.body) {
+		start_early_widget_tagging();
+	} else {
+		document.addEventListener("DOMContentLoaded", start_early_widget_tagging);
 	}
 })();

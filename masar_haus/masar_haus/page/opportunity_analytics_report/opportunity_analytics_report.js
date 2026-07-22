@@ -29,7 +29,7 @@
 	}
 
 	// ── CSS ─────────────────────────────────────────────────────────────────────
-	var CSS_ID = "opp-db-styles-v5";
+	var CSS_ID = "opp-db-styles-v8";
 	function injectStyles() {
 		if (document.getElementById(CSS_ID)) return;
 		var el = document.createElement("style");
@@ -142,8 +142,45 @@
   text-align: center; padding: 32px; color: #9ca3af; font-size: 13px;
 }
 @media (max-width: 900px) {
-  .opp-grid-3 { grid-template-columns: 1fr; }
-  .opp-grid-2 { grid-template-columns: 1fr; }
+  /* Summary panels, Top-5 tables, and the status doughnuts are wide,
+     content-heavy cards -- stacking them into one narrow column makes for
+     a very long scroll. Turn each row into a horizontally-swipeable
+     carousel instead: cards keep a comfortable width and you swipe between
+     them, with scroll-snap so a swipe settles on a card instead of leaving
+     it half-visible. */
+  .opp-grid-3, .opp-grid-2 {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px; /* room for the scrollbar so it doesn't crowd the cards */
+  }
+  .opp-grid-3 > *, .opp-grid-2 > * {
+    flex: 0 0 88%;
+    scroll-snap-align: start;
+  }
+  /* Sales Stage Pipeline chart: its measured width comes from a min-width
+     set inline in renderDashboard() (see pipelineWidthStyle) so Chart.js
+     draws one legible bar per stage instead of squeezing all of them into
+     the viewport -- this scrolls that overflow instead of clipping it. */
+  .opp-chart-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+}
+/* Mobile only -- desktop's 5-across metric row and table columns have room
+   to breathe already; on a ~360-390px phone width they don't. */
+@media (max-width: 560px) {
+  /* 5 metrics in one un-wrapped flex row (Total/Won/Live/Lost/Win Rate) ran
+     out of room and got clipped off the right edge of the screen. Wrap to
+     ~3-per-row instead of shrinking them past legibility. */
+  .opp-metric-row { flex-wrap: wrap; }
+  .opp-metric { flex: 1 1 30%; min-width: 0; }
+  /* Top-5 tables (Client/Stage/Status/Value) don't have room for all 4
+     columns at readable width -- scroll the panel horizontally instead of
+     letting cell text wrap into an unreadable stack. */
+  .opp-panel { overflow-x: auto; }
+  .opp-table { white-space: nowrap; }
 }
 `;
 		document.head.appendChild(el);
@@ -283,9 +320,25 @@
 	}
 
 	// ── Doughnut chart ──────────────────────────────────────────────────────────
+	// Every filter change / refresh calls renderDashboard() -> $body.html(html),
+	// which replaces the DOM, then re-runs renderDoughnut()/renderPipelineChart()
+	// against the fresh canvases. Chart.js keeps its own internal registry of
+	// live chart instances that isn't cleared just because the old canvas was
+	// removed from the DOM -- without an explicit .destroy() first, those stale
+	// instances' ResizeObservers keep firing against now-detached nodes (the
+	// "Failed to execute 'removeChild'" console errors), and a new chart can
+	// silently fail to render, leaving the canvas blank. renderBarChart()
+	// already destroys its previous instance before creating a new one --
+	// applying that same pattern here for the doughnuts/pipeline chart.
+	var _doughnutCharts = {};
+
 	function renderDoughnut(canvasId, d) {
 		var canvas = document.getElementById(canvasId);
 		if (!canvas) return;
+		if (_doughnutCharts[canvasId]) {
+			_doughnutCharts[canvasId].destroy();
+			_doughnutCharts[canvasId] = null;
+		}
 		var total = d.won + d.live + d.lost;
 
 		var centerPlugin = {
@@ -307,7 +360,7 @@
 			},
 		};
 
-		new Chart(canvas, {
+		_doughnutCharts[canvasId] = new Chart(canvas, {
 			type: "doughnut",
 			plugins: [centerPlugin],
 			data: {
@@ -392,8 +445,14 @@
 		},
 	};
 
+	var _pipelineChart = null;
+
 	function renderPipelineChart(pipeline) {
 		var canvas = document.getElementById("opp-pipeline-chart");
+		if (_pipelineChart) {
+			_pipelineChart.destroy();
+			_pipelineChart = null;
+		}
 		if (!canvas || !pipeline || pipeline.length === 0) return;
 
 		var sorted = pipeline; // already sorted largest-first by the backend
@@ -404,7 +463,7 @@
 		var grcVals  = sorted.map(function (p) { return p.grc_val; });
 		var fullData = sorted; // keep for tooltip
 
-		new Chart(canvas, {
+		_pipelineChart = new Chart(canvas, {
 			type: "bar",
 			plugins: [pipelineValueLabelsPlugin],
 			data: {
@@ -499,7 +558,7 @@
 				if (!value) return;
 				var props = bar.getProps(["x", "y", "base"], true);
 				var barHeight = Math.abs(props.base - props.y);
-				var formatted = fmtNum(value);
+				var formatted = fmtCompact(value);
 				ctx.save();
 				ctx.font = "bold 12px 'Inter', Arial, sans-serif";
 				ctx.textAlign = "center";
@@ -578,6 +637,25 @@
 		var pipelineH     = "380px";
 		var pipelineTotal = pipelineItems.reduce(function (s, p) { return s + p.total_cnt; }, 0);
 
+		// On mobile this chart has no room for one bar per sales stage, so
+		// Chart.js squeezes/rotates everything to fit. Give the canvas's
+		// measured parent real per-category width instead (same reasoning as
+		// the height comment above -- must be inline at insertion time, JS
+		// after the fact won't reflow before Chart.js reads it), wrapped in a
+		// horizontally-scrollable box. Desktop already has enough width, so
+		// this only kicks in under the same 900px breakpoint used elsewhere
+		// on this page.
+		var pipelineWidthStyle = "";
+		var barWidthStyle = "";
+		if (window.innerWidth <= 900) {
+			var pipelineMinWidth = Math.max(pipelineItems.length * 100, 500);
+			pipelineWidthStyle = "min-width:" + pipelineMinWidth + "px;";
+
+			var barMonthCount = (data.bar && data.bar.months || []).length;
+			var barMinWidth   = Math.max(barMonthCount * 100, 500);
+			barWidthStyle = "min-width:" + barMinWidth + "px;";
+		}
+
 		var html =
 			'<div class="opp-db">' +
 
@@ -602,7 +680,9 @@
 				: '') +
 			'</h3>' +
 			'<div class="opp-panel">' +
-			'<div style="position:relative;height:' + pipelineH + '"><canvas id="opp-pipeline-chart"></canvas></div>' +
+			'<div class="opp-chart-scroll">' +
+			'<div style="position:relative;height:' + pipelineH + ';' + pipelineWidthStyle + '"><canvas id="opp-pipeline-chart"></canvas></div>' +
+			"</div>" +
 			"</div>" +
 
 			// Doughnuts
@@ -625,7 +705,9 @@
 			'<option value="CF">Corporate Finance (CF)</option>' +
 			'<option value="GRC">Corporate Governance (GRC)</option>' +
 			"</select></div>" +
-			'<div style="position:relative;height:320px"><canvas id="opp-bar-chart"></canvas></div>' +
+			'<div class="opp-chart-scroll">' +
+			'<div style="position:relative;height:320px;' + barWidthStyle + '"><canvas id="opp-bar-chart"></canvas></div>' +
+			"</div>" +
 			"</div>" +
 
 			"</div>"; // .opp-db
