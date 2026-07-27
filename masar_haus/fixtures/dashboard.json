@@ -2,6 +2,15 @@
  {
   "cards": [
    {
+    "card": "Total — All Opportunities"
+   },
+   {
+    "card": "CF — All Opportunities"
+   },
+   {
+    "card": "GRC — All Opportunities"
+   },
+   {
     "card": "Total — Live Opportunities"
    },
    {
@@ -57,7 +66,7 @@
   "doctype": "Dashboard",
   "is_default": 0,
   "is_standard": 0,
-  "modified": "2026-06-25 16:01:01.104089",
+  "modified": "2026-07-27 15:41:31.071987",
   "module": "Masar Haus",
   "name": "Opportunity Dashboard"
  }

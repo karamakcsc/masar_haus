@@ -5,10 +5,14 @@ LIVE = ("Open", "Quotation")
 LOST = ("Lost",)
 
 
-def _build_where(territory=None, sales_stage=None, sales_stage_1=None):
+def _build_where(territory=None, sales_stage=None, sales_stage_1=None, industry=None, sub_industry=None, department=None):
 	"""Return (where_clause, params_tuple) for dynamic filtering."""
-	conditions = ["custom_item_group IN ('Corporate Finance', 'Corporate Governance')"]
-	params = []
+	if department and department != "all":
+		conditions = ["custom_item_group = %s"]
+		params = [department]
+	else:
+		conditions = ["custom_item_group IN ('Corporate Finance', 'Corporate Governance')"]
+		params = []
 
 	if territory and territory != "all":
 		conditions.append("territory = %s")
@@ -21,6 +25,14 @@ def _build_where(territory=None, sales_stage=None, sales_stage_1=None):
 	if sales_stage_1 and sales_stage_1 != "all":
 		conditions.append("custom_sales_stage_1 = %s")
 		params.append(sales_stage_1)
+
+	if industry and industry != "all":
+		conditions.append("industry = %s")
+		params.append(industry)
+
+	if sub_industry and sub_industry != "all":
+		conditions.append("custom_sub_industry = %s")
+		params.append(sub_industry)
 
 	return " AND ".join(conditions), tuple(params)
 
@@ -54,16 +66,45 @@ def get_filter_options():
 		ORDER BY custom_sales_stage_1
 		""",
 	)
+	industries = frappe.db.sql(
+		"""
+		SELECT DISTINCT industry
+		FROM tabOpportunity
+		WHERE custom_item_group IN ('Corporate Finance', 'Corporate Governance')
+		  AND industry IS NOT NULL AND industry != ''
+		ORDER BY industry
+		""",
+	)
+	sub_industries = frappe.db.sql(
+		"""
+		SELECT DISTINCT custom_sub_industry
+		FROM tabOpportunity
+		WHERE custom_item_group IN ('Corporate Finance', 'Corporate Governance')
+		  AND custom_sub_industry IS NOT NULL AND custom_sub_industry != ''
+		ORDER BY custom_sub_industry
+		""",
+	)
+	departments = frappe.db.sql(
+		"""
+		SELECT DISTINCT custom_item_group
+		FROM tabOpportunity
+		WHERE custom_item_group IN ('Corporate Finance', 'Corporate Governance')
+		ORDER BY custom_item_group
+		""",
+	)
 	return {
 		"territories": [r[0] for r in territories],
 		"sales_stages": [r[0] for r in stages],
 		"sales_stages_1": [r[0] for r in stages_1],
+		"industries": [r[0] for r in industries],
+		"sub_industries": [r[0] for r in sub_industries],
+		"departments": [r[0] for r in departments],
 	}
 
 
 @frappe.whitelist()
-def get_dashboard_data(territory="all", sales_stage="all", sales_stage_1="all"):
-	where, params = _build_where(territory, sales_stage, sales_stage_1)
+def get_dashboard_data(territory="all", sales_stage="all", sales_stage_1="all", industry="all", sub_industry="all", department="all"):
+	where, params = _build_where(territory, sales_stage, sales_stage_1, industry, sub_industry, department)
 
 	# Main aggregation — avoids DATE_FORMAT to sidestep % escaping with params
 	rows = frappe.db.sql(
@@ -355,6 +396,58 @@ def get_nc_total_lost(filters=None, **kwargs):
 		"route_options": {
 			"custom_item_group": ["in", "Corporate Finance,Corporate Governance"],
 			"status": ["in", "Lost"],
+		},
+	}
+
+# Grand totals (Won + Live + Lost combined) -- matches the "Total" metric on
+# the Opportunity Analytics Report page, which is deliberately the sum of
+# these three status buckets rather than an unconditional count, so this
+# stays consistent even if an Opportunity status outside WON/LIVE/LOST shows
+# up in the data.
+ALL_STATUSES = WON + LIVE + LOST
+
+@frappe.whitelist()
+def get_nc_cf_all(filters=None, **kwargs):
+	count = frappe.db.count("Opportunity", {
+		"custom_item_group": "Corporate Finance",
+		"status": ["in", list(ALL_STATUSES)],
+	})
+	return {
+		"value": count,
+		"route": ["List", "Opportunity", "List"],
+		"route_options": {
+			"custom_item_group": "Corporate Finance",
+			"status": ["in", ",".join(ALL_STATUSES)],
+		},
+	}
+
+@frappe.whitelist()
+def get_nc_grc_all(filters=None, **kwargs):
+	count = frappe.db.count("Opportunity", {
+		"custom_item_group": "Corporate Governance",
+		"status": ["in", list(ALL_STATUSES)],
+	})
+	return {
+		"value": count,
+		"route": ["List", "Opportunity", "List"],
+		"route_options": {
+			"custom_item_group": "Corporate Governance",
+			"status": ["in", ",".join(ALL_STATUSES)],
+		},
+	}
+
+@frappe.whitelist()
+def get_nc_total_all(filters=None, **kwargs):
+	count = frappe.db.count("Opportunity", {
+		"custom_item_group": ["in", ["Corporate Finance", "Corporate Governance"]],
+		"status": ["in", list(ALL_STATUSES)],
+	})
+	return {
+		"value": count,
+		"route": ["List", "Opportunity", "List"],
+		"route_options": {
+			"custom_item_group": ["in", "Corporate Finance,Corporate Governance"],
+			"status": ["in", ",".join(ALL_STATUSES)],
 		},
 	}
 

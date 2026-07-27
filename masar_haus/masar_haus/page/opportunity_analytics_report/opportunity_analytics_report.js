@@ -19,6 +19,419 @@
 		});
 	}
 
+	// ── Export ──────────────────────────────────────────────────────────────────
+	function downloadFile(filename, content, mime) {
+		var blob = new Blob([content], { type: mime });
+		var url = URL.createObjectURL(blob);
+		var a = document.createElement("a");
+		a.href = url;
+		a.download = filename;
+		document.body.appendChild(a);
+		a.click();
+		document.body.removeChild(a);
+		URL.revokeObjectURL(url);
+	}
+
+	// Exports already run against whatever the filter bar currently has
+	// selected (lastData is refreshed on every applyFilters() -> loadData()
+	// call), but the exported file itself never said which filters produced
+	// it -- opened later, out of context, there was no way to tell. This
+	// renders the active ones (or a clear "no filters" note) for both
+	// exports to stamp onto the file.
+	var FILTER_LABELS = {
+		department: "Department",
+		territory: "Territory",
+		sales_stage: "Main Stage",
+		sales_stage_1: "Sales Stage",
+		industry: "Main Industry",
+		sub_industry: "Industry",
+	};
+	function describeFilters(filters) {
+		var parts = [];
+		Object.keys(FILTER_LABELS).forEach(function (key) {
+			var val = filters && filters[key];
+			if (val && val !== "all") parts.push(FILTER_LABELS[key] + ": " + val);
+		});
+		return parts.length ? parts.join(" | ") : "None (showing all data)";
+	}
+
+	function loadExcelLib(cb) {
+		if (window.ExcelJS) return cb();
+		var s = document.createElement("script");
+		s.src = "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js";
+		s.onload = cb;
+		document.head.appendChild(s);
+	}
+
+	var SEGMENT_COLORS = { total: "FF4F46E5", CF: "FF3B82F6", GRC: "FF7C3AED" };
+
+	// Writes one "card": a colored segment-name header row, then a Number-of-
+	// Opportunities row and a Value(QAR) row underneath -- mirrors the
+	// on-screen summary cards. Returns the next free row (with a blank
+	// spacer row already included).
+	function addCardBlock(sheet, row, label, key, s) {
+		sheet.mergeCells(row, 1, row, 6);
+		var head = sheet.getCell(row, 1);
+		head.value = label;
+		head.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 12 };
+		head.fill = { type: "pattern", pattern: "solid", fgColor: { argb: SEGMENT_COLORS[key] || "FF334155" } };
+		head.alignment = { vertical: "middle" };
+		sheet.getRow(row).height = 20;
+		row++;
+
+		["", "Total", "Won", "Live", "Lost", "Win Rate"].forEach(function (h, i) {
+			var c = sheet.getCell(row, i + 1);
+			c.value = h;
+			c.font = { bold: true, color: { argb: "FF6B7280" } };
+			c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF9FAFB" } };
+		});
+		row++;
+
+		[s.numbers.total, s.numbers.won, s.numbers.live, s.numbers.lost].forEach(function (v, i) {
+			sheet.getCell(row, i + 2).value = v;
+		});
+		sheet.getCell(row, 1).value = "Number of Opportunities";
+		sheet.getCell(row, 6).value = s.numbers.win_pct / 100;
+		sheet.getCell(row, 6).numFmt = "0.0%";
+		row++;
+
+		[s.values.total, s.values.won, s.values.live, s.values.lost].forEach(function (v, i) {
+			var c = sheet.getCell(row, i + 2);
+			c.value = v;
+			c.numFmt = "#,##0";
+		});
+		sheet.getCell(row, 1).value = "Value (QAR)";
+		sheet.getCell(row, 6).value = s.values.win_pct / 100;
+		sheet.getCell(row, 6).numFmt = "0.0%";
+		row++;
+
+		return row + 1;
+	}
+
+	function addTable(sheet, row, headers, rows, colFormats) {
+		headers.forEach(function (h, i) {
+			var c = sheet.getCell(row, i + 1);
+			c.value = h;
+			c.font = { bold: true, color: { argb: "FF374151" } };
+			c.fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFF3F4F6" } };
+		});
+		row++;
+		(rows || []).forEach(function (r) {
+			r.forEach(function (v, i) {
+				var c = sheet.getCell(row, i + 1);
+				c.value = v;
+				if (colFormats && colFormats[i]) c.numFmt = colFormats[i];
+			});
+			row++;
+		});
+		return row + 1;
+	}
+
+	// Embeds the chart's canvas as a picture (ExcelJS has no live-chart API,
+	// so this is a pixel-perfect grab of the already-drawn Chart.js canvas,
+	// same technique as the PDF export) and returns the row below it, sized
+	// off the image's own aspect ratio so a following table doesn't overlap.
+	function addChartImage(workbook, sheet, canvasId, row, widthPx) {
+		var canvas = document.getElementById(canvasId);
+		if (!canvas || !canvas.width || !canvas.height) return row;
+		var imageId = workbook.addImage({ base64: canvas.toDataURL("image/png", 1.0), extension: "png" });
+		var w = widthPx || 480;
+		var h = (canvas.height / canvas.width) * w;
+		sheet.addImage(imageId, { tl: { col: 0, row: row - 1 }, ext: { width: w, height: h } });
+		return row + Math.ceil(h / 18) + 2; // ~18px/row at default row height, plus a spacer
+	}
+
+	function buildXLSX(data, filters) {
+		var workbook = new ExcelJS.Workbook();
+		workbook.creator = "Masar Haus";
+		workbook.created = new Date();
+
+		// ── Summary: title + one card per segment ──
+		var summary = workbook.addWorksheet("Summary");
+		summary.columns = [{ width: 26 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 14 }, { width: 12 }];
+		summary.getCell(1, 1).value = "Opportunity Analytics Report";
+		summary.getCell(1, 1).font = { bold: true, size: 16 };
+		summary.getCell(2, 1).value = "Exported: " + frappe.datetime.now_datetime();
+		summary.getCell(2, 1).font = { color: { argb: "FF9CA3AF" } };
+		summary.getCell(3, 1).value = "Filters: " + describeFilters(filters);
+		summary.getCell(3, 1).font = { color: { argb: "FF9CA3AF" } };
+
+		var row = 5;
+		row = addCardBlock(summary, row, "Total — CF + GRC", "total", data.summary.total);
+		row = addCardBlock(summary, row, "Corporate Finance (CF)", "CF", data.summary.CF);
+		row = addCardBlock(summary, row, "Corporate Governance (GRC)", "GRC", data.summary.GRC);
+
+		// ── Top 5 sheets ──
+		function top5Sheet(name, rows) {
+			var sheet = workbook.addWorksheet(name);
+			sheet.columns = [{ width: 5 }, { width: 26 }, { width: 20 }, { width: 20 }, { width: 14 }, { width: 16 }];
+			addTable(
+				sheet, 1,
+				["#", "Client", "Opportunity", "Sales Stage", "Status", "Value (QAR)"],
+				(rows || []).map(function (r, i) {
+					return [i + 1, r.customer_name || r.title, r.name, r.sales_stage || "", r.status, r.opportunity_amount];
+				}),
+				{ 5: "#,##0" }
+			);
+		}
+		top5Sheet("Top 5 - CF", data.top5_cf);
+		top5Sheet("Top 5 - GRC", data.top5_grc);
+
+		// ── Pipeline: chart image + full breakdown table ──
+		var pipeline = workbook.addWorksheet("Pipeline");
+		pipeline.columns = [{ width: 22 }, { width: 16 }, { width: 10 }, { width: 16 }, { width: 10 }, { width: 16 }, { width: 10 }];
+		var pRow = addChartImage(workbook, pipeline, "opp-pipeline-chart", 1, 620);
+		addTable(
+			pipeline, pRow,
+			["Sales Stage", "CF (QAR)", "CF #", "GRC (QAR)", "GRC #", "Total (QAR)", "Total #"],
+			(data.pipeline || []).map(function (p) {
+				return [p.stage, p.cf_val, p.cf_cnt, p.grc_val, p.grc_cnt, p.total_val, p.total_cnt];
+			}),
+			{ 1: "#,##0", 3: "#,##0", 5: "#,##0" }
+		);
+
+		// ── Monthly: chart image + table ──
+		var monthly = workbook.addWorksheet("Monthly");
+		monthly.columns = [{ width: 14 }, { width: 18 }, { width: 20 }, { width: 22 }];
+		var bar = data.bar || {};
+		var mRow = addChartImage(workbook, monthly, "opp-bar-chart", 1, 620);
+		addTable(
+			monthly, mRow,
+			["Month", "Total (QAR)", "Corporate Finance (QAR)", "Corporate Governance (QAR)"],
+			(bar.months || []).map(function (m, i) { return [m, bar.total[i], bar.cf[i], bar.grc[i]]; }),
+			{ 1: "#,##0", 2: "#,##0", 3: "#,##0" }
+		);
+
+		// ── Charts: the 3 status doughnuts, stacked ──
+		var charts = workbook.addWorksheet("Charts");
+		charts.columns = [{ width: 70 }];
+		var cRow = 1;
+		[
+			["Total — CF + GRC", "doughnut-total"],
+			["Corporate Finance (CF)", "doughnut-CF"],
+			["Corporate Governance (GRC)", "doughnut-GRC"],
+		].forEach(function (spec) {
+			charts.getCell(cRow, 1).value = spec[0];
+			charts.getCell(cRow, 1).font = { bold: true };
+			cRow += 1;
+			cRow = addChartImage(workbook, charts, spec[1], cRow, 380);
+		});
+
+		workbook.xlsx.writeBuffer().then(function (buf) {
+			downloadFile(
+				"opportunity-analytics-report.xlsx",
+				buf,
+				"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+			);
+		});
+	}
+
+	function exportToExcel(data, filters) {
+		if (!data) {
+			frappe.msgprint(__("Nothing to export yet -- wait for the report to finish loading."));
+			return;
+		}
+		loadExcelLib(function () { buildXLSX(data, filters); });
+	}
+
+	// window.print() (the previous approach) hands off to the browser's own
+	// print engine, which turned out unreliable here: charts silently failed
+	// to print, a card was cut off mid-way at a page break, and the desk
+	// sidebar leaked into the output. Building the PDF directly instead gives
+	// full control over layout and page breaks, and charts are captured via
+	// canvas.toDataURL() -- a pixel-perfect grab of the actual already-drawn
+	// Chart.js canvas, not a re-render or a screenshot approximation.
+	function loadPdfLibs(cb) {
+		if (window.jspdf && window.jspdf.jsPDF && window.jspdf.jsPDF.API.autoTable) return cb();
+		var s1 = document.createElement("script");
+		s1.src = "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js";
+		s1.onload = function () {
+			var s2 = document.createElement("script");
+			s2.src = "https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/dist/jspdf.plugin.autotable.min.js";
+			s2.onload = cb;
+			document.head.appendChild(s2);
+		};
+		document.head.appendChild(s1);
+	}
+
+	function chartImage(canvasId) {
+		var canvas = document.getElementById(canvasId);
+		if (!canvas || !canvas.width || !canvas.height) return null;
+		return { dataUrl: canvas.toDataURL("image/png", 1.0), width: canvas.width, height: canvas.height };
+	}
+
+	function buildPDF(data, filters) {
+		var doc = new window.jspdf.jsPDF({ unit: "pt", format: "a4" });
+		var PAGE_W = doc.internal.pageSize.getWidth();
+		var PAGE_H = doc.internal.pageSize.getHeight();
+		var MARGIN = 36;
+		var CONTENT_W = PAGE_W - MARGIN * 2;
+		var y = MARGIN;
+
+		function ensureRoom(height) {
+			if (y + height > PAGE_H - MARGIN) {
+				doc.addPage();
+				y = MARGIN;
+			}
+		}
+
+		function heading(text) {
+			ensureRoom(28);
+			doc.setFont(undefined, "bold");
+			doc.setFontSize(13);
+			doc.setTextColor(30, 41, 59);
+			doc.text(text, MARGIN, y);
+			doc.setDrawColor(226, 232, 240);
+			doc.line(MARGIN, y + 5, PAGE_W - MARGIN, y + 5);
+			y += 22;
+		}
+
+		function subheading(text) {
+			ensureRoom(18);
+			doc.setFont(undefined, "bold");
+			doc.setFontSize(10.5);
+			doc.setTextColor(55, 65, 81);
+			doc.text(text, MARGIN, y);
+			y += 14;
+		}
+
+		// Fit an image into the given width (or CONTENT_W), preserving aspect
+		// ratio, and place it at (x, y) -- adding a page first if it wouldn't
+		// fit on what's left of the current one, since a chart can't usefully
+		// split across pages. Does NOT advance y itself (a row of side-by-side
+		// images needs to advance once for the whole row, by the tallest of
+		// them, not per image) -- callers must advance y by the returned
+		// height themselves.
+		function addImage(img, opts) {
+			if (!img) return 0;
+			opts = opts || {};
+			var x = opts.x !== undefined ? opts.x : MARGIN;
+			var maxWidth = Math.min(opts.width || CONTENT_W, CONTENT_W);
+			var w = maxWidth;
+			var h = (img.height / img.width) * w;
+			var maxH = PAGE_H - MARGIN * 2;
+			if (h > maxH) { h = maxH; w = (img.width / img.height) * h; }
+			if (!opts.noPageBreak && y + h > PAGE_H - MARGIN && y > MARGIN) { doc.addPage(); y = MARGIN; }
+			doc.addImage(img.dataUrl, "PNG", x, y, w, h);
+			return h;
+		}
+
+		function table(head, body, opts) {
+			doc.autoTable(Object.assign({
+				startY: y,
+				margin: { left: MARGIN, right: MARGIN },
+				head: [head],
+				body: body,
+				styles: { fontSize: 8.5, cellPadding: 4 },
+				headStyles: { fillColor: [243, 244, 246], textColor: [55, 65, 81] },
+			}, opts || {}));
+			y = doc.lastAutoTable.finalY + 18;
+		}
+
+		// ── Title ──
+		doc.setFont(undefined, "bold");
+		doc.setFontSize(18);
+		doc.setTextColor(17, 24, 39);
+		doc.text("Opportunity Analytics Report", MARGIN, y);
+		y += 18;
+		doc.setFont(undefined, "normal");
+		doc.setFontSize(9);
+		doc.setTextColor(156, 163, 175);
+		doc.text("Generated " + new Date().toString().replace(/ \(.*\)/, ""), MARGIN, y);
+		y += 12;
+		doc.text("Filters: " + describeFilters(filters), MARGIN, y);
+		y += 24;
+
+		// ── Summary ──
+		heading("Summary");
+		[["Total — CF + GRC", "total"], ["Corporate Finance (CF)", "CF"], ["Corporate Governance (GRC)", "GRC"]].forEach(function (row) {
+			var s = data.summary[row[1]];
+			subheading(row[0]);
+			table(
+				["", "Total", "Won", "Live", "Lost", "Win Rate"],
+				[
+					["Number of Opportunities", s.numbers.total, s.numbers.won, s.numbers.live, s.numbers.lost, s.numbers.win_pct + "%"],
+					["Value (QAR)", fmtCompact(s.values.total), fmtCompact(s.values.won), fmtCompact(s.values.live), fmtCompact(s.values.lost), s.values.win_pct + "%"],
+				]
+			);
+		});
+
+		// ── Top 5 ──
+		heading("Top 5 Live Opportunities by Value");
+		function top5Table(label, rows) {
+			subheading(label);
+			table(
+				["#", "Client", "Opportunity", "Stage", "Status", "Value (QAR)"],
+				(rows || []).map(function (r, i) {
+					return [i + 1, r.customer_name || r.title, r.name, r.sales_stage || "", r.status, fmtNum(r.opportunity_amount)];
+				})
+			);
+		}
+		top5Table("Corporate Finance (CF)", data.top5_cf);
+		top5Table("Corporate Governance (GRC)", data.top5_grc);
+
+		// ── Pipeline ──
+		heading("Sales Stage Pipeline");
+		y += addImage(chartImage("opp-pipeline-chart")) + 10;
+		table(
+			["Sales Stage", "CF (QAR)", "CF #", "GRC (QAR)", "GRC #", "Total (QAR)", "Total #"],
+			(data.pipeline || []).map(function (p) {
+				return [p.stage, fmtNum(p.cf_val), p.cf_cnt, fmtNum(p.grc_val), p.grc_cnt, fmtNum(p.total_val), p.total_cnt];
+			})
+		);
+
+		// ── Doughnuts ── all 3 side by side in one row, matching the on-screen
+		// layout: labels drawn at each column's x, then images below them --
+		// widths are computed first so the row's height (tallest of the 3) is
+		// known before drawing, letting ensureRoom() break to a new page for
+		// the whole row instead of possibly splitting it mid-row.
+		heading("Opportunity Value by Status");
+		var donutGap = 16;
+		var donutColW = (CONTENT_W - donutGap * 2) / 3;
+		var donutSpecs = [
+			["Total — CF + GRC", "doughnut-total"],
+			["Corporate Finance (CF)", "doughnut-CF"],
+			["Corporate Governance (GRC)", "doughnut-GRC"],
+		];
+		var donutImages = donutSpecs.map(function (row) { return chartImage(row[1]); });
+		var donutRowH = donutImages.reduce(function (max, img) {
+			return img ? Math.max(max, (img.height / img.width) * donutColW) : max;
+		}, 0);
+		ensureRoom(14 + donutRowH);
+		donutSpecs.forEach(function (row, i) {
+			doc.setFont(undefined, "bold");
+			doc.setFontSize(10);
+			doc.setTextColor(55, 65, 81);
+			doc.text(row[0], MARGIN + i * (donutColW + donutGap), y);
+		});
+		y += 14;
+		donutSpecs.forEach(function (row, i) {
+			addImage(donutImages[i], { x: MARGIN + i * (donutColW + donutGap), width: donutColW, noPageBreak: true });
+		});
+		y += donutRowH + 10;
+
+		// ── Monthly bar ──
+		heading("Monthly Live Opportunity Value");
+		y += addImage(chartImage("opp-bar-chart")) + 10;
+		var bar = data.bar || {};
+		table(
+			["Month", "Total (QAR)", "Corporate Finance (QAR)", "Corporate Governance (QAR)"],
+			(bar.months || []).map(function (m, i) {
+				return [m, fmtNum(bar.total[i]), fmtNum(bar.cf[i]), fmtNum(bar.grc[i])];
+			})
+		);
+
+		doc.save("opportunity-analytics-report.pdf");
+	}
+
+	function exportToPDF(data, filters) {
+		if (!data) {
+			frappe.msgprint(__("Nothing to export yet -- wait for the report to finish loading."));
+			return;
+		}
+		loadPdfLibs(function () { buildPDF(data, filters); });
+	}
+
 	// ── Chart.js dynamic loader ─────────────────────────────────────────────────
 	function loadChartJs(cb) {
 		if (window.Chart) return cb();
@@ -182,34 +595,72 @@
   .opp-panel { overflow-x: auto; }
   .opp-table { white-space: nowrap; }
 }
+/* Fallback for manually printing this page (Ctrl+P) -- Actions -> Export to
+   PDF no longer goes through window.print() (see exportToPDF/buildPDF: it
+   turned out unreliable -- charts didn't print, a card was cut mid-way at a
+   page break, and the desk sidebar leaked into the output -- so that action
+   now builds the PDF directly instead). Kept for whoever prints by hand
+   anyway: print page width often lands inside the max-width:900/560px
+   ranges above (they're not print-qualified, so they'd otherwise apply
+   here too), which would print the summary/table/doughnut carousels as a
+   single 88%-wide card each with the rest clipped off, since print has no
+   way to "swipe" the hidden ones into view. Force the normal grid back for
+   print, and drop controls that aren't meaningful on a static page. */
+@media print {
+  .opp-filter-bar, .bar-controls { display: none !important; }
+  .opp-grid-3, .opp-grid-2 {
+    display: grid !important;
+    overflow: visible !important;
+  }
+  .opp-grid-3 { grid-template-columns: repeat(3, 1fr) !important; }
+  .opp-grid-2 { grid-template-columns: repeat(2, 1fr) !important; }
+  .opp-grid-3 > *, .opp-grid-2 > * { flex: unset !important; }
+  .opp-chart-scroll, .opp-panel { overflow: visible !important; }
+  .opp-panel { box-shadow: none !important; break-inside: avoid; }
+  .opp-db h3.sec-title { break-after: avoid; }
+}
 `;
 		document.head.appendChild(el);
 	}
 
 	// ── Filter bar ──────────────────────────────────────────────────────────────
 	function buildFilterBarHTML(opts) {
+		var deptOpts = '<option value="all">All Departments</option>' +
+			(opts.departments || []).map(function (s) {
+				return '<option value="' + s.replace(/"/g, "&quot;") + '">' + s + '</option>';
+			}).join("");
+
 		var territoryOpts = '<option value="all">All Territories</option>' +
 			opts.territories.map(function (t) {
 				return '<option value="' + t + '">' + t + '</option>';
 			}).join("");
 
-		var stageOpts = '<option value="all">All Stages</option>' +
+		var industryOpts = '<option value="all">All Main Industries</option>' +
+			(opts.industries || []).map(function (s) {
+				return '<option value="' + s.replace(/"/g, "&quot;") + '">' + s + '</option>';
+			}).join("");
+
+		var stageOpts = '<option value="all">All Main Stages</option>' +
 			opts.sales_stages.map(function (s) {
 				return '<option value="' + s.replace(/"/g, "&quot;") + '">' + s + '</option>';
 			}).join("");
 
-		var stage1Opts = '<option value="all">All Sales Stage 1</option>' +
+		var stage1Opts = '<option value="all">All Sales Stages</option>' +
 			(opts.sales_stages_1 || []).map(function (s) {
 				return '<option value="' + s.replace(/"/g, "&quot;") + '">' + s + '</option>';
 			}).join("");
 
 		return (
 			'<div class="opp-filter-bar">' +
+			'<div class="opp-filter-item"><label>Department</label>' +
+			'<select id="opp-f-department" class="opp-select">' + deptOpts + '</select></div>' +
 			'<div class="opp-filter-item"><label>Territory</label>' +
 			'<select id="opp-f-territory" class="opp-select">' + territoryOpts + '</select></div>' +
-			'<div class="opp-filter-item"><label>Sales Stage</label>' +
+			'<div class="opp-filter-item"><label>Main Industry</label>' +
+			'<select id="opp-f-industry" class="opp-select">' + industryOpts + '</select></div>' +
+			'<div class="opp-filter-item"><label>Main Stage</label>' +
 			'<select id="opp-f-stage" class="opp-select">' + stageOpts + '</select></div>' +
-			'<div class="opp-filter-item"><label>Sales Stage 1</label>' +
+			'<div class="opp-filter-item"><label>Sales Stage</label>' +
 			'<select id="opp-f-stage1" class="opp-select">' + stage1Opts + '</select></div>' +
 			'<button class="opp-filter-clear" id="opp-f-clear">Clear Filters</button>' +
 			'<div class="opp-filter-chips" id="opp-filter-chips"></div>' +
@@ -221,16 +672,19 @@
 		var chips = document.getElementById("opp-filter-chips");
 		if (!chips) return;
 		var parts = [];
+		if (filters.department !== "all") parts.push(filters.department);
 		if (filters.territory !== "all") parts.push(filters.territory);
 		if (filters.sales_stage !== "all") parts.push(filters.sales_stage);
 		if (filters.sales_stage_1 !== "all") parts.push(filters.sales_stage_1);
+		if (filters.industry !== "all") parts.push(filters.industry);
+		if (filters.sub_industry !== "all") parts.push(filters.sub_industry);
 		chips.innerHTML = parts.map(function (p) {
 			return '<span class="opp-chip">' + p + '</span>';
 		}).join("");
 	}
 
 	function markActiveSelects(filters) {
-		["opp-f-territory", "opp-f-stage", "opp-f-stage1"].forEach(function (id) {
+		["opp-f-department", "opp-f-territory", "opp-f-stage", "opp-f-stage1", "opp-f-industry", "opp-f-subindustry"].forEach(function (id) {
 			var el = document.getElementById(id);
 			if (!el) return;
 			el.classList.toggle("active", el.value !== "all");
@@ -739,10 +1193,13 @@
 		});
 
 		page.add_action_item(__("Refresh"), function () { loadData(); });
+		page.add_action_item(__("Export to Excel"), function () { exportToExcel(lastData, filters); });
+		page.add_action_item(__("Export to PDF"), function () { exportToPDF(lastData, filters); });
 
 		var $body    = $(wrapper).find(".layout-main-section");
-		var filters  = { territory: "all", sales_stage: "all", sales_stage_1: "all" };
+		var filters  = { department: "all", territory: "all", sales_stage: "all", sales_stage_1: "all", industry: "all", sub_industry: "all" };
 		var filterBarHTML = ""; // built after get_filter_options
+		var lastData = null; // most recently rendered data, kept for Export to Excel
 
 		function applyFilters() {
 			updateFilterChips(filters);
@@ -751,11 +1208,21 @@
 		}
 
 		function bindFilterListeners() {
-			var terSel    = document.getElementById("opp-f-territory");
-			var stageSel  = document.getElementById("opp-f-stage");
-			var stage1Sel = document.getElementById("opp-f-stage1");
-			var clearBtn  = document.getElementById("opp-f-clear");
+			var deptSel     = document.getElementById("opp-f-department");
+			var terSel      = document.getElementById("opp-f-territory");
+			var stageSel    = document.getElementById("opp-f-stage");
+			var stage1Sel   = document.getElementById("opp-f-stage1");
+			var industrySel = document.getElementById("opp-f-industry");
+			var subIndSel   = document.getElementById("opp-f-subindustry");
+			var clearBtn    = document.getElementById("opp-f-clear");
 
+			if (deptSel) {
+				deptSel.value = filters.department;
+				deptSel.addEventListener("change", function () {
+					filters.department = this.value;
+					applyFilters();
+				});
+			}
 			if (terSel) {
 				terSel.value = filters.territory;
 				terSel.addEventListener("change", function () {
@@ -777,14 +1244,34 @@
 					applyFilters();
 				});
 			}
+			if (industrySel) {
+				industrySel.value = filters.industry;
+				industrySel.addEventListener("change", function () {
+					filters.industry = this.value;
+					applyFilters();
+				});
+			}
+			if (subIndSel) {
+				subIndSel.value = filters.sub_industry;
+				subIndSel.addEventListener("change", function () {
+					filters.sub_industry = this.value;
+					applyFilters();
+				});
+			}
 			if (clearBtn) {
 				clearBtn.addEventListener("click", function () {
+					filters.department    = "all";
 					filters.territory     = "all";
 					filters.sales_stage   = "all";
 					filters.sales_stage_1 = "all";
-					if (terSel)    { terSel.value    = "all"; terSel.classList.remove("active"); }
-					if (stageSel)  { stageSel.value  = "all"; stageSel.classList.remove("active"); }
-					if (stage1Sel) { stage1Sel.value = "all"; stage1Sel.classList.remove("active"); }
+					filters.industry      = "all";
+					filters.sub_industry  = "all";
+					if (deptSel)     { deptSel.value     = "all"; deptSel.classList.remove("active"); }
+					if (terSel)      { terSel.value      = "all"; terSel.classList.remove("active"); }
+					if (stageSel)    { stageSel.value    = "all"; stageSel.classList.remove("active"); }
+					if (stage1Sel)   { stage1Sel.value   = "all"; stage1Sel.classList.remove("active"); }
+					if (industrySel) { industrySel.value = "all"; industrySel.classList.remove("active"); }
+					if (subIndSel)   { subIndSel.value   = "all"; subIndSel.classList.remove("active"); }
 					applyFilters();
 				});
 			}
@@ -810,12 +1297,16 @@
 			frappe.call({
 				method: "masar_haus.masar_haus.page.opportunity_analytics_report.opportunity_analytics_report.get_dashboard_data",
 				args: {
+					department: filters.department,
 					territory: filters.territory,
 					sales_stage: filters.sales_stage,
 					sales_stage_1: filters.sales_stage_1,
+					industry: filters.industry,
+					sub_industry: filters.sub_industry,
 				},
 				callback: function (r) {
 					if (!r.message) return;
+					lastData = r.message;
 					renderDashboard($body, r.message, filterBarHTML);
 					bindFilterListeners();
 					updateFilterChips(filters);

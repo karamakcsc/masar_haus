@@ -260,7 +260,9 @@ fixtures = [
                 "Opportunity-custom_item_group",
                 "Opportunity-custom_project_description",
                 "Prospect-custom_customer",
-                "Opportunity-custom_sales_stage_1"
+                "Opportunity-custom_sales_stage_1",
+                "Opportunity-custom_sub_industry",
+                "Opportunity-custom_variable_fees"
             ]
         ]
     ]},
