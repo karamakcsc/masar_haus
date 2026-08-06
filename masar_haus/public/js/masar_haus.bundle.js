@@ -136,8 +136,19 @@
 	// Frappe's fixed default height of 240px regardless of container width --
 	// ends up dominating the whole card with a lot of dead space beneath it.
 	// Shrink it there; wider layouts have room for the default size.
-	function is_mobile_width() {
+	function is_mobile_donut_height() {
 		return window.innerWidth <= 560;
+	}
+
+	// The chart grid around the two bar charts collapses to a narrower layout
+	// at 900px (masar_haus.bundle.scss @media max-width: 900px), not 560px --
+	// this threshold has to match that breakpoint (not the donut one above),
+	// otherwise phones/tablets in the 561-900px range (landscape phones,
+	// phablets, larger accessibility text) get the narrower grid without the
+	// compensating per-category-width fix below, and frappe-charts truncates
+	// labels again.
+	function is_mobile_bar_width() {
+		return window.innerWidth <= 900;
 	}
 
 	// frappe-charts truncates x-axis labels based on a max-chars budget of
@@ -156,6 +167,56 @@
 			$wrapper.wrap('<div class="masar-chart-scroll"></div>');
 		}
 	}
+
+	// Inverse of the above, applied when a resize/orientationchange takes the
+	// viewport back above the bar-width breakpoint -- without this, rotating
+	// a phone from portrait to landscape (crossing back over 900px) would
+	// leave a stale forced min-width/scroll wrapper from the narrower layout.
+	function reset_scrollable_bar_chart(wrapper) {
+		const $wrapper = $(wrapper);
+		$wrapper.css("min-width", "");
+		if ($wrapper.parent().hasClass("masar-chart-scroll")) {
+			$wrapper.unwrap();
+		}
+	}
+
+	// is_mobile_bar_width() is only ever read once, at chart-creation time
+	// inside patch_make_chart -- so without this registry + listener,
+	// rotating the device (or resizing a desktop browser) after the
+	// dashboard has already loaded wouldn't re-apply/undo the scroll fix
+	// until a full page reload recreated the charts. Entries for wrappers no
+	// longer in the document are just skipped (harmless no-op), rather than
+	// pruned -- the array only grows across chart re-renders within a single
+	// page load, which resets on navigation anyway.
+	const bar_chart_registry = [];
+
+	function refresh_bar_chart_scroll_state() {
+		const mobile = is_mobile_bar_width();
+		bar_chart_registry.forEach(function (entry) {
+			if (!document.body.contains(entry.wrapper)) return;
+			if (mobile) {
+				ensure_scrollable_bar_chart(entry.wrapper, entry.category_count);
+			} else {
+				reset_scrollable_bar_chart(entry.wrapper);
+			}
+		});
+	}
+
+	function debounce(fn, wait) {
+		let timer;
+		return function () {
+			const args = arguments;
+			const ctx = this;
+			clearTimeout(timer);
+			timer = setTimeout(function () {
+				fn.apply(ctx, args);
+			}, wait);
+		};
+	}
+
+	const debounced_refresh_bar_charts = debounce(refresh_bar_chart_scroll_state, 150);
+	window.addEventListener("resize", debounced_refresh_bar_charts);
+	window.addEventListener("orientationchange", debounced_refresh_bar_charts);
 
 	function attach_bar_value_labels(wrapper, datasets) {
 		function fix_labels() {
@@ -202,7 +263,7 @@
 						formatTooltipY: (value) => format_millions(value),
 					},
 				});
-				if (is_mobile_width()) {
+				if (is_mobile_donut_height()) {
 					custom_options.height = 160;
 				}
 				if (custom_options.data) {
@@ -212,8 +273,12 @@
 
 			if (BAR_LABEL_CHARTS.has(widget_title)) {
 				custom_options = Object.assign({}, custom_options, { valuesOverPoints: true });
-				if (is_mobile_width() && custom_options.data && custom_options.data.labels) {
-					ensure_scrollable_bar_chart(wrapper, custom_options.data.labels.length);
+				if (custom_options.data && custom_options.data.labels) {
+					const category_count = custom_options.data.labels.length;
+					bar_chart_registry.push({ wrapper: wrapper, category_count: category_count });
+					if (is_mobile_bar_width()) {
+						ensure_scrollable_bar_chart(wrapper, category_count);
+					}
 				}
 			}
 

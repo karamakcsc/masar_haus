@@ -219,8 +219,8 @@
 		margin-left: 0;
 	}
 
-	/* Center the now-shrunk donut ring (see is_mobile_width() height override
-	   in masar_haus.bundle.js) instead of letting it stretch the full card
+	/* Center the now-shrunk donut ring (see is_mobile_donut_height() height
+	   override in masar_haus.bundle.js) instead of letting it stretch the full card
 	   width, which would just re-introduce the oversized-ring problem.
 	   A definite width (not just max-width) is required here -- frappe-charts
 	   measures this element's clientWidth to size the SVG *before* the ring
@@ -259,4 +259,14 @@
 	overflow-x: auto;
 	max-width: 100%;
 	-webkit-overflow-scrolling: touch;
+
+	/* Without this, a vertical scroll gesture starting over this
+	   horizontal-scroll box can get captured as horizontal panning instead
+	   of bubbling up to scroll the page -- a known nested-scroll-region
+	   failure mode on mobile, especially iOS Safari. Same pattern (and same
+	   fix) as .opp-chart-scroll in opportunity_analytics_report.js. Only
+	   ever wrapped around a chart at mobile widths (see is_mobile_bar_width()
+	   in masar_haus.bundle.js), so this is safe unconditionally here. */
+	touch-action: pan-x;
+	overscroll-behavior-x: contain;
 }

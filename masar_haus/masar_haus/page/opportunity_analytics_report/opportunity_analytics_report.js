@@ -442,7 +442,7 @@
 	}
 
 	// ── CSS ─────────────────────────────────────────────────────────────────────
-	var CSS_ID = "opp-db-styles-v8";
+	var CSS_ID = "opp-db-styles-v11";
 	function injectStyles() {
 		if (document.getElementById(CSS_ID)) return;
 		var el = document.createElement("style");
@@ -556,29 +556,34 @@
 }
 @media (max-width: 900px) {
   /* Summary panels, Top-5 tables, and the status doughnuts are wide,
-     content-heavy cards -- stacking them into one narrow column makes for
-     a very long scroll. Turn each row into a horizontally-swipeable
-     carousel instead: cards keep a comfortable width and you swipe between
-     them, with scroll-snap so a swipe settles on a card instead of leaving
-     it half-visible. */
+     content-heavy cards. These used to become a horizontally-swipeable
+     carousel here (flex row + overflow-x: auto + scroll-snap), on the
+     theory that cards keep a comfortable width and you swipe between them.
+     In practice, a single card is tall enough to fill the whole viewport
+     below the filter bar on a phone, so a vertical swipe has nowhere to
+     land except on top of the carousel -- and confirmed on a real Android
+     device, that carousel can capture the vertical gesture instead of
+     letting it bubble up to scroll the page, even with touch-action set,
+     making the page unscrollable past the first card. Collapsing to a
+     single grid column instead removes the horizontal-scroll surface
+     entirely -- cards stack full-width, vertically, in normal block flow,
+     so there's no competing scroll axis for the browser to get wrong. */
   .opp-grid-3, .opp-grid-2 {
-    display: flex;
-    overflow-x: auto;
-    scroll-snap-type: x mandatory;
-    -webkit-overflow-scrolling: touch;
-    padding-bottom: 4px; /* room for the scrollbar so it doesn't crowd the cards */
-  }
-  .opp-grid-3 > *, .opp-grid-2 > * {
-    flex: 0 0 88%;
-    scroll-snap-align: start;
+    grid-template-columns: 1fr;
   }
   /* Sales Stage Pipeline chart: its measured width comes from a min-width
      set inline in renderDashboard() (see pipelineWidthStyle) so Chart.js
      draws one legible bar per stage instead of squeezing all of them into
-     the viewport -- this scrolls that overflow instead of clipping it. */
+     the viewport -- this scrolls that overflow instead of clipping it.
+     Genuinely needs horizontal scroll (many categories, unlike the cards
+     above), so touch-action stays here as defense-in-depth -- this region
+     is a single ~380px/~220px-tall panel, not most of the viewport, so it
+     wasn't implicated in the reported stuck-page screenshots. */
   .opp-chart-scroll {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+    touch-action: pan-x;
+    overscroll-behavior-x: contain;
   }
 }
 /* Mobile only -- desktop's 5-across metric row and table columns have room
@@ -591,8 +596,9 @@
   .opp-metric { flex: 1 1 30%; min-width: 0; }
   /* Top-5 tables (Client/Stage/Status/Value) don't have room for all 4
      columns at readable width -- scroll the panel horizontally instead of
-     letting cell text wrap into an unreadable stack. */
-  .opp-panel { overflow-x: auto; }
+     letting cell text wrap into an unreadable stack. Same nested-scroll
+     vertical-gesture-capture risk as the carousels above, so same fix. */
+  .opp-panel { overflow-x: auto; touch-action: pan-x; overscroll-behavior-x: contain; }
   .opp-table { white-space: nowrap; }
 }
 /* Fallback for manually printing this page (Ctrl+P) -- Actions -> Export to
@@ -602,9 +608,9 @@
    now builds the PDF directly instead). Kept for whoever prints by hand
    anyway: print page width often lands inside the max-width:900/560px
    ranges above (they're not print-qualified, so they'd otherwise apply
-   here too), which would print the summary/table/doughnut carousels as a
-   single 88%-wide card each with the rest clipped off, since print has no
-   way to "swipe" the hidden ones into view. Force the normal grid back for
+   here too), which would print the summary/top-5/doughnut grids
+   single-column (see the mobile collapse above) instead of the multi-column
+   layout a printed report should use. Force the desktop grid back for
    print, and drop controls that aren't meaningful on a static page. */
 @media print {
   .opp-filter-bar, .bar-controls { display: none !important; }
