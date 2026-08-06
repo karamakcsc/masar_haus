@@ -53,6 +53,18 @@ Opportunity Analytics Report (custom Page — `opportunity_analytics_report.py`/
 - Export to PDF: generates the PDF directly (via jsPDF + autotable) instead of the browser's print dialog, laying out every card, table, and chart image explicitly with controlled page breaks.
 - Both exports show the currently active filters (or "None (showing all data)") so an exported file makes sense read out of context.
 
+**2026-08-06 — Mobile scroll fixes for both dashboards**
+
+Opportunity Dashboard (`masar_haus.bundle.js`/`.scss`):
+- Split the single `is_mobile_width()` check into separate donut-height (560px) and bar-chart-scroll (900px) thresholds, aligning the bar-chart fix with the SCSS grid's actual mobile breakpoint — previously both shared one 560px threshold, so viewports between 561-900px (phones in landscape, phablets, small tablets) got the narrower grid without the compensating per-category-width fix, and frappe-charts truncated the Monthly/Pipeline chart labels again.
+- Added a debounced resize/orientationchange listener so rotating the device re-applies the bar-chart scroll fix instead of requiring a full reload.
+- Added `touch-action`/`overscroll-behavior-x` to `.masar-chart-scroll` as defense-in-depth against a vertical swipe being captured as horizontal panning.
+
+Opportunity Analytics Report:
+- Replaced the mobile carousel (flex + `overflow-x: auto` + `scroll-snap`) for the Summary/Top-5/Doughnut sections with a single-column grid collapse — the carousel could capture a vertical swipe as horizontal panning on some mobile browsers, leaving the page unable to scroll past the first card.
+- Diagnosed a follow-up mobile scroll-jank complaint with a live on-device diagnostic (confirmed the scroll container was correctly configured with plenty of overflow, not blocked) and mitigated the actual cause — 5 live Chart.js canvases plus ~10 shadowed cards now stacked into one long page: capped Chart.js's `devicePixelRatio`, throttled its resize-triggered redraws (`resizeDelay`), and added CSS containment (`contain: layout style`) to `.opp-panel` so each card's layout doesn't force a whole-page recalculation on every scroll frame.
+- Note for future edits to this page: its controller script isn't part of the bundled/hashed asset pipeline, so it's easy to assume `bench build` is irrelevant to it — but it's still required, because Frappe's client-side page cache (`localStorage["_page:<name>"]`) is only busted when `bench build` changes `assets.json`'s timestamp. Skipping it after an edit leaves browsers serving a stale cached copy of this page indefinitely, with no server-side symptom to indicate why.
+
 ### License
 
 mit
