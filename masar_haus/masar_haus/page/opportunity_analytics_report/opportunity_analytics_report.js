@@ -437,12 +437,21 @@
 		if (window.Chart) return cb();
 		var s = document.createElement("script");
 		s.src = "https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js";
-		s.onload = cb;
+		s.onload = function () {
+			// Mobile perf: this page can have 5 live canvases at once (3 doughnuts +
+			// pipeline + monthly bar), each rendered at full devicePixelRatio (2-3x on
+			// most phones) -- capping that materially cuts GPU/paint cost on a
+			// canvas-heavy page without a visible quality loss, which matters once the
+			// page is long enough (single-column mobile layout) that scrolling has to
+			// composite past all of them.
+			window.Chart.defaults.devicePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+			cb();
+		};
 		document.head.appendChild(s);
 	}
 
 	// ── CSS ─────────────────────────────────────────────────────────────────────
-	var CSS_ID = "opp-db-styles-v11";
+	var CSS_ID = "opp-db-styles-v12";
 	function injectStyles() {
 		if (document.getElementById(CSS_ID)) return;
 		var el = document.createElement("style");
@@ -499,6 +508,14 @@
 .opp-panel {
   background: #fff; border: 1px solid #e5e7eb; border-radius: 10px;
   padding: 18px 16px; box-shadow: 0 1px 4px rgba(0,0,0,.05);
+  /* The single-column mobile layout stacks ~10 of these cards (summary,
+     top-5, doughnuts, charts) into one long scrollable page -- containment
+     tells the browser each card's own layout/style changes can't affect
+     anything outside it, so scrolling doesn't have to re-check the whole
+     page's layout on every frame. contain:paint is deliberately left out --
+     it would clip this card's own box-shadow and the Top-5 tables'
+     horizontal overflow-x at 560px (see below). */
+  contain: layout style;
 }
 .opp-panel-title {
   font-size: 13px; font-weight: 700; color: #1f2937; text-align: center;
@@ -836,6 +853,7 @@
 			options: {
 				responsive: true,
 				maintainAspectRatio: false,
+				resizeDelay: 200,
 				cutout: "62%",
 				plugins: {
 					legend: {
@@ -952,6 +970,7 @@
 			options: {
 				responsive: true,
 				maintainAspectRatio: false,
+				resizeDelay: 200,
 				layout: { padding: { top: 24 } },
 				plugins: {
 					legend: {
@@ -1063,6 +1082,7 @@
 			options: {
 				responsive: true,
 				maintainAspectRatio: false,
+				resizeDelay: 200,
 				layout: { padding: { top: 20 } },
 				plugins: {
 					legend: { display: false },
