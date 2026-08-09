@@ -151,6 +151,62 @@
 		return window.innerWidth <= 900;
 	}
 
+	// Lets a vertical drag scroll the page even when it starts on a
+	// horizontally-scrollable region (.masar-chart-scroll, touch-action:
+	// pan-x -- see masar_haus.bundle.scss). touch-action alone can't tell "this
+	// drag turned out vertical" from "horizontal" until it's already
+	// committed to the pan-x axis, so the browser reserves BOTH directions
+	// for itself on that element, silently swallowing vertical drags that
+	// start there. Pointer Events (not touchstart/touchmove) so this covers
+	// touch and pen/mouse drags with one code path; gated to pointerType ===
+	// "touch" below so it doesn't also hijack mouse-drag text selection on
+	// desktop, where touch-action:pan-x isn't even in effect (that rule only
+	// applies under the ≤900px media query). Shared by every
+	// .masar-chart-scroll instance (Pipeline and Monthly can each get their
+	// own) via the one call site in ensure_scrollable_bar_chart() below,
+	// rather than duplicating this per chart.
+	function attach_axis_lock_scroll(el) {
+		const scrollEl = document.querySelector(".main-section");
+		if (!scrollEl) return;
+
+		const DEAD_ZONE = 6;
+		let state = null;
+
+		el.addEventListener("pointerdown", function (e) {
+			if (e.pointerType !== "touch") return;
+			state = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, lastY: e.clientY, axis: null };
+		});
+
+		// passive: false is required here -- without it the browser won't let
+		// preventDefault() below actually suppress its own touch-action-driven
+		// handling of the gesture once the axis locks to "y".
+		el.addEventListener("pointermove", function (e) {
+			if (!state || e.pointerId !== state.pointerId) return;
+
+			if (!state.axis) {
+				const dx = e.clientX - state.startX;
+				const dy = e.clientY - state.startY;
+				if (Math.abs(dx) < DEAD_ZONE && Math.abs(dy) < DEAD_ZONE) return;
+				state.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+			}
+
+			if (state.axis === "y") {
+				e.preventDefault();
+				scrollEl.scrollTop -= e.clientY - state.lastY;
+				state.lastY = e.clientY;
+			}
+			// axis === "x": do nothing -- native overflow-x + touch-action:pan-x
+			// already handles it exactly as today.
+		}, { passive: false });
+
+		function reset(e) {
+			if (state && e.pointerId === state.pointerId) state = null;
+		}
+		el.addEventListener("pointerup", reset);
+		el.addEventListener("pointercancel", reset);
+		el.addEventListener("pointerleave", reset);
+	}
+
 	// frappe-charts truncates x-axis labels based on a max-chars budget of
 	// (this.width / category_count) * 0.6 / 7 -- i.e. it's driven entirely by
 	// the chart's actual rendered pixel width, not by font-size. Give the
@@ -164,7 +220,13 @@
 		const min_width = Math.max((category_count || 0) * 130, 300);
 		$wrapper.css("min-width", min_width + "px");
 		if (!$wrapper.parent().hasClass("masar-chart-scroll")) {
+			// Only reached when a NEW .masar-chart-scroll is about to be created
+			// (wrap() below) -- attaching here, once per fresh node, is what
+			// keeps this from double-attaching if ensure_scrollable_bar_chart()
+			// runs again while the existing wrapper is still in place (the
+			// hasClass check above already skips re-wrapping in that case).
 			$wrapper.wrap('<div class="masar-chart-scroll"></div>');
+			attach_axis_lock_scroll($wrapper.parent()[0]);
 		}
 	}
 
@@ -308,5 +370,103 @@
 		start_early_widget_tagging();
 	} else {
 		document.addEventListener("DOMContentLoaded", start_early_widget_tagging);
+	}
+
+	// ── Mobile scroll-progress indicator (approved design), Opportunity
+	// Dashboard only ──────────────────────────────────────────────────────────
+	// This bundle loads on every desk page (app_include_js), so unlike a
+	// single custom Page there's no one navigation event to hook for "we just
+	// arrived here" -- instead this reuses the same content-based check the
+	// rest of the file already relies on to scope itself to this dashboard:
+	// data-chart-title (tag_widget_from_title_el, driven by the
+	// MutationObserver in start_early_widget_tagging()) is only ever set on
+	// THIS dashboard's own widgets, so its presence in the DOM *is* "are we on
+	// the Opportunity Dashboard right now."
+	function is_on_opportunity_dashboard() {
+		return !!document.querySelector("[data-chart-title]");
+	}
+
+	let $scroll_track = null;
+	let $scroll_thumb = null;
+
+	function ensure_scroll_indicator_elements() {
+		if ($scroll_track) return;
+		$scroll_track = $('<div class="masar-scroll-track"></div>').appendTo(document.body);
+		$scroll_thumb = $('<div class="masar-scroll-thumb"></div>').appendTo($scroll_track);
+	}
+
+	function update_scroll_indicator() {
+		if (!is_on_opportunity_dashboard()) {
+			// Elements are appended to document.body (not scoped inside this
+			// dashboard's own container the way Surface 1's are), so navigating
+			// away needs an explicit hide -- otherwise the CSS's ≤560px
+			// display:block would keep it visible over every other desk page too.
+			if ($scroll_track) $scroll_track.css("display", "none");
+			return;
+		}
+		ensure_scroll_indicator_elements();
+		$scroll_track.css("display", ""); // hand visibility back to the CSS media query
+
+		// .main-section (frappe/www/desk.html) is the one scroll container
+		// shared by every desk route -- confirmed directly against a live
+		// on-device diagnostic during the Analytics Report mobile-scroll
+		// investigation, so the same container applies here unchanged.
+		const scrollEl = document.querySelector(".main-section");
+		if (!scrollEl) return;
+		const trackH = $scroll_track[0].clientHeight;
+		if (!trackH) return;
+		const scrollableH = scrollEl.scrollHeight - scrollEl.clientHeight;
+		const pct = scrollableH > 0 ? scrollEl.scrollTop / scrollableH : 0;
+		const thumbH = Math.min(Math.max(trackH * 0.18, 40), trackH);
+		$scroll_thumb.css({ height: thumbH + "px", top: (pct * (trackH - thumbH)) + "px" });
+	}
+
+	// requestAnimationFrame-throttled rather than debounce() above -- debounce
+	// would only move the thumb once scrolling stops, but the spec calls for
+	// it to visibly track the scroll position live, so this coalesces updates
+	// to at most once per frame instead of delaying them.
+	function raf_throttle(fn) {
+		let scheduled = false;
+		return function () {
+			const args = arguments, ctx = this;
+			if (scheduled) return;
+			scheduled = true;
+			requestAnimationFrame(function () {
+				scheduled = false;
+				fn.apply(ctx, args);
+			});
+		};
+	}
+
+	const throttled_update_scroll_indicator = raf_throttle(update_scroll_indicator);
+
+	function attach_scroll_indicator() {
+		const scrollEl = document.querySelector(".main-section");
+		if (scrollEl) {
+			scrollEl.addEventListener("scroll", throttled_update_scroll_indicator, { passive: true });
+		}
+
+		// Widgets (and therefore data-chart-title) render asynchronously, and
+		// the page may already be scrolled from a previous visit, so a scroll
+		// event alone can't be relied on to ever fire -- this separate observer
+		// catches both "arrived at the dashboard" and "left it" without
+		// touching the existing widget-tagging observer above. Watching the
+		// attribute directly (not just childList) matters: data-chart-title is
+		// set via .attr() on an already-existing element (tag_widget_from_title_el),
+		// not by inserting a new node, so a childList-only observer would only
+		// catch that change incidentally, whenever some OTHER node happens to
+		// get added afterwards -- not reliably or immediately.
+		new MutationObserver(throttled_update_scroll_indicator).observe(document.body, {
+			childList: true,
+			subtree: true,
+			attributes: true,
+			attributeFilter: ["data-chart-title"],
+		});
+	}
+
+	if (document.body) {
+		attach_scroll_indicator();
+	} else {
+		document.addEventListener("DOMContentLoaded", attach_scroll_indicator);
 	}
 })();

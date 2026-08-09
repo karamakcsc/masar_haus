@@ -451,7 +451,7 @@
 	}
 
 	// ── CSS ─────────────────────────────────────────────────────────────────────
-	var CSS_ID = "opp-db-styles-v12";
+	var CSS_ID = "opp-db-styles-v13";
 	function injectStyles() {
 		if (document.getElementById(CSS_ID)) return;
 		var el = document.createElement("style");
@@ -571,6 +571,9 @@
 .opp-empty {
   text-align: center; padding: 32px; color: #9ca3af; font-size: 13px;
 }
+/* Scroll-progress indicator: hidden by default, shown only at <=560px (see
+   that media query below) and explicitly re-hidden for print further down. */
+.opp-scroll-track, .opp-scroll-thumb { display: none; }
 @media (max-width: 900px) {
   /* Summary panels, Top-5 tables, and the status doughnuts are wide,
      content-heavy cards. These used to become a horizontally-swipeable
@@ -617,6 +620,32 @@
      vertical-gesture-capture risk as the carousels above, so same fix. */
   .opp-panel { overflow-x: auto; touch-action: pan-x; overscroll-behavior-x: contain; }
   .opp-table { white-space: nowrap; }
+
+  /* Custom scroll-progress indicator (approved design) -- mobile scrollbars
+     are thin/auto-hiding and easy to miss on a page this long, so this gives
+     a persistent visual cue of how far down the page you are. pointer-events:
+     none on both -- this sits on top of real content and must never
+     intercept a tap. Position/height are set by JS on scroll (see
+     setup_scroll_indicator() below); the CSS here only handles static
+     appearance and visibility. */
+  .opp-scroll-track {
+    display: block;
+    position: fixed;
+    top: 0; right: 0; bottom: 0;
+    width: 5px;
+    background: rgba(99,102,241,.08);
+    border-radius: 3px;
+    pointer-events: none;
+    z-index: 10000;
+  }
+  .opp-scroll-thumb {
+    position: absolute;
+    top: 0; right: 0;
+    width: 5px;
+    background: linear-gradient(180deg,#818cf8,#4338ca);
+    border-radius: 3px;
+    pointer-events: none;
+  }
 }
 /* Fallback for manually printing this page (Ctrl+P) -- Actions -> Export to
    PDF no longer goes through window.print() (see exportToPDF/buildPDF: it
@@ -641,6 +670,7 @@
   .opp-chart-scroll, .opp-panel { overflow: visible !important; }
   .opp-panel { box-shadow: none !important; break-inside: avoid; }
   .opp-db h3.sec-title { break-after: avoid; }
+  .opp-scroll-track, .opp-scroll-thumb { display: none !important; }
 }
 `;
 		document.head.appendChild(el);
@@ -1210,6 +1240,136 @@
 		});
 	}
 
+	// ── Mobile scroll-progress indicator (approved design) ──────────────────────
+	// requestAnimationFrame-throttled rather than debounced (see debounce() in
+	// masar_haus.bundle.js for the equivalent pattern used elsewhere in this
+	// app) -- debounce would only move the thumb once scrolling stops, but the
+	// spec calls for it to visibly track the scroll position live, so this
+	// coalesces updates to at most once per frame instead of delaying them.
+	function raf_throttle(fn) {
+		var scheduled = false;
+		return function () {
+			var args = arguments, ctx = this;
+			if (scheduled) return;
+			scheduled = true;
+			requestAnimationFrame(function () {
+				scheduled = false;
+				fn.apply(ctx, args);
+			});
+		};
+	}
+
+	// Frappe desk pages don't unmount on navigation -- frappe.container.
+	// change_to() (frappe/public/js/frappe/views/container.js) just hides the
+	// previous page's wrapper and shows this one, triggering jQuery "hide"/
+	// "show" events on it either way, for the rest of the session. .main-
+	// section (frappe/www/desk.html) is the one scroll container shared by
+	// every desk route -- confirmed directly against a live diagnostic on the
+	// actual device during the mobile-scroll-lock investigation on this page,
+	// not assumed. The listener has to be added/removed on those same show/
+	// hide events: added too early it does nothing (nothing to attach to
+	// yet), and left attached after navigating away it would keep
+	// recalculating on every OTHER page's scrolling for no reason.
+	function setup_scroll_indicator(wrapper) {
+		var scrollEl = document.querySelector(".main-section");
+		if (!scrollEl) return;
+
+		var $track = $('<div class="opp-scroll-track"></div>').appendTo(wrapper);
+		var $thumb = $('<div class="opp-scroll-thumb"></div>').appendTo($track);
+
+		function update() {
+			var trackH = $track[0].clientHeight;
+			if (!trackH) return;
+			var scrollableH = scrollEl.scrollHeight - scrollEl.clientHeight;
+			var pct = scrollableH > 0 ? scrollEl.scrollTop / scrollableH : 0;
+			// Measuring the track's OWN clientHeight here (rather than
+			// scrollEl's) keeps the thumb pixel-accurate even when the two
+			// briefly disagree -- e.g. .main-section's 100vh can measure
+			// taller than the real visible viewport while a mobile browser's
+			// address bar is mid-collapse.
+			var thumbH = Math.min(Math.max(trackH * 0.18, 40), trackH);
+			$thumb.css({ height: thumbH + "px", top: (pct * (trackH - thumbH)) + "px" });
+		}
+
+		var throttled_update = raf_throttle(update);
+
+		function attach() {
+			scrollEl.addEventListener("scroll", throttled_update, { passive: true });
+			update();
+		}
+		function detach() {
+			scrollEl.removeEventListener("scroll", throttled_update);
+		}
+
+		$(wrapper).on("show", attach);
+		$(wrapper).on("hide", detach);
+	}
+
+	// ── Vertical-swipe-blocked-on-horizontal-scroll fix (approved design) ───────
+	// .opp-chart-scroll (Pipeline chart) and .opp-panel (Top-5 tables, at
+	// <=560px -- see the injected CSS above) are touch-action: pan-x so they
+	// can be swiped sideways without hijacking the page scroll. touch-action
+	// alone can't tell "this drag turned out vertical" from "horizontal" until
+	// it's already committed to the pan-x axis, so the browser reserves BOTH
+	// directions for itself on those elements, silently swallowing vertical
+	// drags that start there. Pointer Events (not touchstart/touchmove) cover
+	// touch and pen/mouse with one code path; gated to pointerType === "touch"
+	// below so it doesn't also hijack mouse-drag text selection on desktop,
+	// where touch-action:pan-x isn't even in effect.
+	//
+	// Delegated on `wrapper` (the page's own root, passed into on_page_load --
+	// the SAME stable node setup_scroll_indicator() above attaches to), not on
+	// .opp-db itself: .opp-db is rebuilt from scratch as a raw HTML string on
+	// every filter change (see renderDashboard()'s $body.html(html)), so it
+	// would already be a *different* DOM node than whatever a real "attach
+	// once" would have bound to. `wrapper` never gets replaced, only its
+	// contents do -- e.target.closest(regionSelector) re-resolves the actual
+	// scrollable ancestor fresh on every gesture, so this keeps working after
+	// any re-render without re-attaching anything.
+	function attach_axis_lock_scroll(wrapper, regionSelector) {
+		var scrollEl = document.querySelector(".main-section");
+		if (!scrollEl) return;
+
+		var DEAD_ZONE = 6;
+		var state = null;
+
+		wrapper.addEventListener("pointerdown", function (e) {
+			if (e.pointerType !== "touch") return;
+			var region = e.target.closest(regionSelector);
+			if (!region) return;
+			state = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, lastY: e.clientY, axis: null };
+		});
+
+		// passive: false is required here -- without it the browser won't let
+		// preventDefault() below actually suppress its own touch-action-driven
+		// handling of the gesture once the axis locks to "y".
+		wrapper.addEventListener("pointermove", function (e) {
+			if (!state || e.pointerId !== state.pointerId) return;
+
+			if (!state.axis) {
+				var dx = e.clientX - state.startX;
+				var dy = e.clientY - state.startY;
+				if (Math.abs(dx) < DEAD_ZONE && Math.abs(dy) < DEAD_ZONE) return;
+				state.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+			}
+
+			if (state.axis === "y") {
+				e.preventDefault();
+				scrollEl.scrollTop -= e.clientY - state.lastY;
+				state.lastY = e.clientY;
+			}
+			// axis === "x": do nothing -- native overflow-x + touch-action:pan-x
+			// already handles it exactly as today.
+		}, { passive: false });
+
+		function reset(e) {
+			if (state && e.pointerId === state.pointerId) state = null;
+		}
+		wrapper.addEventListener("pointerup", reset);
+		wrapper.addEventListener("pointercancel", reset);
+		wrapper.addEventListener("pointerleave", reset);
+	}
+
 	// ── Page entry point ─────────────────────────────────────────────────────────
 	frappe.pages["opportunity-analytics-report"].on_page_load = function (wrapper) {
 		var page = frappe.ui.make_app_page({
@@ -1217,6 +1377,9 @@
 			title: __("Opportunity Analytics Report"),
 			single_column: true,
 		});
+
+		setup_scroll_indicator(wrapper);
+		attach_axis_lock_scroll(wrapper, ".opp-chart-scroll, .opp-panel");
 
 		page.add_action_item(__("Refresh"), function () { loadData(); });
 		page.add_action_item(__("Export to Excel"), function () { exportToExcel(lastData, filters); });

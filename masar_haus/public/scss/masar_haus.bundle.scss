@@ -255,6 +255,51 @@
 	}
 }
 
+/* Scroll-progress indicator: hidden by default, shown only at <=560px (JS
+   toggles visibility off .masar-scroll-track too when navigating away from
+   this dashboard -- see update_scroll_indicator() in masar_haus.bundle.js). */
+.masar-scroll-track, .masar-scroll-thumb {
+	display: none;
+}
+
+@media (max-width: 560px) {
+	/* Custom scroll-progress indicator (approved design) -- mobile scrollbars
+	   are thin/auto-hiding and easy to miss, so this gives a persistent visual
+	   cue of how far down the page you are. pointer-events:none on both --
+	   sits on top of real content and must never intercept a tap. Position/
+	   height are set by JS on scroll (see update_scroll_indicator() in
+	   masar_haus.bundle.js); the CSS here only handles static appearance. */
+	.masar-scroll-track {
+		display: block;
+		position: fixed;
+		top: 0;
+		right: 0;
+		bottom: 0;
+		width: 5px;
+		background: rgba(99, 102, 241, 0.08);
+		border-radius: 3px;
+		pointer-events: none;
+		z-index: 10000;
+	}
+	.masar-scroll-thumb {
+		position: absolute;
+		top: 0;
+		right: 0;
+		width: 5px;
+		background: linear-gradient(180deg, #818cf8, #4338ca);
+		border-radius: 3px;
+		pointer-events: none;
+	}
+}
+
+@media print {
+	/* Same reasoning as opportunity_analytics_report.js's print block: a
+	   scroll indicator makes no sense on a static, fully-visible printout. */
+	.masar-scroll-track, .masar-scroll-thumb {
+		display: none !important;
+	}
+}
+
 .masar-chart-scroll {
 	overflow-x: auto;
 	max-width: 100%;

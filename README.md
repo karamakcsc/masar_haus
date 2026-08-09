@@ -65,6 +65,15 @@ Opportunity Analytics Report:
 - Diagnosed a follow-up mobile scroll-jank complaint with a live on-device diagnostic (confirmed the scroll container was correctly configured with plenty of overflow, not blocked) and mitigated the actual cause — 5 live Chart.js canvases plus ~10 shadowed cards now stacked into one long page: capped Chart.js's `devicePixelRatio`, throttled its resize-triggered redraws (`resizeDelay`), and added CSS containment (`contain: layout style`) to `.opp-panel` so each card's layout doesn't force a whole-page recalculation on every scroll frame.
 - Note for future edits to this page: its controller script isn't part of the bundled/hashed asset pipeline, so it's easy to assume `bench build` is irrelevant to it — but it's still required, because Frappe's client-side page cache (`localStorage["_page:<name>"]`) is only busted when `bench build` changes `assets.json`'s timestamp. Skipping it after an edit leaves browsers serving a stale cached copy of this page indefinitely, with no server-side symptom to indicate why.
 
+**2026-08-09 — Mobile scroll-progress indicator + axis-lock touch scroll fix**
+
+Both features, approved-design mockups, applied identically to the Opportunity Dashboard (`masar_haus.bundle.js`/`.scss`) and the Opportunity Analytics Report (`opportunity_analytics_report.js`):
+
+- Scroll-progress indicator: a slim `<=560px`-only vertical track/thumb fixed to the right edge of the viewport, `pointer-events: none`, position/height driven by a `requestAnimationFrame`-throttled scroll listener on `.main-section` (the one scroll container shared by every desk route). Dashboard version is gated to only run on the Opportunity Dashboard via the existing `data-chart-title` widget-tagging mechanism, since the bundle loads on every desk page.
+- Axis-lock touch scroll fix: `.opp-chart-scroll`/`.opp-panel`/`.masar-chart-scroll` are `touch-action: pan-x` so they can be swiped sideways without hijacking the page scroll — but that also silently blocked a *vertical* drag starting on them, since touch-action can't tell the two apart until a drag is already committed to the pan-x axis. Fixed via a shared `attach_axis_lock_scroll()` Pointer Events helper (gated to `pointerType === "touch"` so desktop mouse-drag text selection isn't affected): after a 6px dead zone, the gesture's axis is decided once — horizontal defers entirely to native `overflow-x`/`touch-action: pan-x`, vertical calls `preventDefault()` and manually drives `.main-section.scrollTop` instead.
+- Report page: delegated on the page's own stable root (`wrapper`), not the repeatedly-rebuilt `.opp-db` div, so it keeps working after filter-change re-renders without re-attaching anything.
+- Dashboard bundle: attached once per real `.masar-chart-scroll` DOM node, inside the existing "only wrap if not already wrapped" check in `ensure_scrollable_bar_chart()`, so it can't double-attach across the mobile→desktop→mobile resize cycle.
+
 ### License
 
 mit
