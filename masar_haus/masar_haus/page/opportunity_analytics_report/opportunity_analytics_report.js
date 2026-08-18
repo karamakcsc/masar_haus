@@ -1,6 +1,222 @@
 (function () {
 	"use strict";
 
+	// ── TEMP DIAGNOSTIC (remove once the cold-load freeze is root-caused) ───────
+	// A phone in its own normal browser has no attached devtools, so console.log
+	// alone is useless for reproducing this -- this appends timestamped lines to
+	// a small always-visible on-page overlay instead, in addition to still
+	// console.log-ing everything for whenever a desktop repro DOES have
+	// devtools open. pointer-events:none so it never blocks the very touch-
+	// scroll gesture we're trying to test. Registered/created lazily on first
+	// use (not tied to on_page_load's own timing) so it can catch errors that
+	// happen before on_page_load even runs.
+	var __opp_debug_t0 = null;
+	function logStep(msg) {
+		var now = (window.performance && performance.now) ? performance.now() : Date.now();
+		if (__opp_debug_t0 === null) __opp_debug_t0 = now;
+		var line = "[+" + (now - __opp_debug_t0).toFixed(0) + "ms] " + msg;
+		console.log("[opp-debug]", line);
+
+		var el = document.getElementById("opp-debug-overlay");
+		if (!el && document.body) {
+			el = document.createElement("div");
+			el.id = "opp-debug-overlay";
+			// Kept intentionally small (not full-width/half-screen) -- this is a
+			// diagnostic aid for testing real page content, not the thing under
+			// test; anything larger risks visually/functionally getting in the
+			// way of the very scroll gesture being reproduced.
+			el.style.cssText =
+				"position:fixed;left:8px;bottom:8px;max-width:70vw;max-height:42vh;" +
+				"overflow-y:auto;background:rgba(0,0,0,.82);color:#7CFC00;" +
+				"font-family:monospace;font-size:10px;line-height:1.4;padding:6px 8px;" +
+				"border-radius:6px;z-index:999999;pointer-events:none;" +
+				"white-space:pre-wrap;word-break:break-word;";
+			document.body.appendChild(el);
+
+			// Appended as a SIBLING of the overlay (not a child) -- a child would
+			// inherit the overlay's pointer-events:none and need an explicit
+			// override; living outside that subtree entirely means it's
+			// trivially tappable with no override needed, and it isn't a
+			// descendant of `wrapper` either, so attach_axis_lock_scroll()'s own
+			// pointerdown/pointermove listeners (bound to `wrapper`) never see
+			// taps on it. Bottom-right so it doesn't overlap the bottom-left log.
+			var btn = document.createElement("button");
+			btn.id = "opp-debug-probe-btn";
+			btn.textContent = "Probe now";
+			btn.style.cssText =
+				"position:fixed;right:8px;bottom:8px;z-index:1000000;" +
+				"pointer-events:auto;background:#4338ca;color:#fff;border:none;" +
+				"border-radius:6px;padding:8px 12px;font-size:12px;font-family:sans-serif;" +
+				"box-shadow:0 2px 6px rgba(0,0,0,.4);";
+			btn.addEventListener("click", probeNow);
+			document.body.appendChild(btn);
+		}
+		if (el) {
+			var row = document.createElement("div");
+			row.textContent = line;
+			el.appendChild(row);
+			el.scrollTop = el.scrollHeight;
+		}
+	}
+
+	// CONFIRMED root causes (via live "Probe now" evidence + reading frappe
+	// core, not guessed) -- TWO independent, unrelated mechanisms in Frappe
+	// core, both of which leave document.body.style.overflow stuck at
+	// "hidden" with nothing left to undo it:
+	//
+	// 1. frappe.ui.Dialog's hide_scrollbar() (frappe/public/js/frappe/ui/
+	//    dialog.js) does `$("body").css("overflow", bool ? "hidden" :
+	//    "auto")`, wired to Bootstrap's own "shown.bs.modal"/"hide.bs.modal"
+	//    events on EVERY Dialog instance (msgprint, confirm, prompt, error
+	//    dialogs -- all of it). If a "hide.bs.modal" event doesn't fire (a
+	//    known Bootstrap CSS-transition-completion edge case), "hidden"
+	//    sticks. One-shot only, tied to whatever dialog happened to be open.
+	//
+	// 2. frappe.ui.Page's mobile sidebar-toggle button (.sidebar-toggle-btn,
+	//    CSS-hidden at >=992px -- frappe/public/scss/desk/page.scss -- i.e.
+	//    ONLY exists/tappable on mobile, matching "mobile only" exactly)
+	//    calls sidebar.set_height() on EVERY click, unconditionally
+	//    (frappe/public/js/frappe/ui/sidebar/sidebar.js), which does
+	//    `document.body.style.overflow = "hidden"` with NO corresponding
+	//    restore anywhere in that file's open()/close()/toggle_width() --
+	//    prevent_scroll() only ever touches .main-section's overflow, never
+	//    body's. This explains "recurs during normal use, not just on load":
+	//    every single tap of that always-on-mobile header button does this,
+	//    with no dialog and no filter change required at all.
+	//
+	// Neither is fixable at its real source from this app -- both are core
+	// frappe files shared by every dialog and every desk page in the whole
+	// framework; overriding them here wouldn't survive a framework update
+	// and is out of scope for an app-level fix. This is a scoped, CONTINUOUS
+	// defensive backstop instead: a MutationObserver watching body's
+	// style/class attributes for the rest of this page's life (not a
+	// one-shot check), clearing the stuck style whenever it happens, but
+	// ONLY when no dialog is actually tracked as open (so a legitimately
+	// open dialog's intentional scroll-lock is never touched).
+	function clearStuckBodyOverflowLock() {
+		function checkAndClear() {
+			var noDialogOpen =
+				!window.cur_dialog &&
+				!(frappe.ui.open_dialogs && frappe.ui.open_dialogs.length) &&
+				!document.querySelector(".modal-backdrop, .modal.show, .modal.in");
+			if (noDialogOpen && document.body.style.overflow === "hidden") {
+				logStep("DEFENSIVE: body.style.overflow stuck at 'hidden' with no dialog open -- clearing it");
+				document.body.style.overflow = "";
+			}
+		}
+		checkAndClear(); // in case it's already stuck by the time this runs
+		new MutationObserver(checkAndClear).observe(document.body, {
+			attributes: true,
+			attributeFilter: ["style", "class"],
+		});
+		// Belt-and-suspenders: a live session showed the stuck state recurring
+		// with NO corresponding "clearing it" log line from the observer above
+		// -- meaning it isn't firing reliably every time this happens on every
+		// device/browser (still unconfirmed why; possibly a MutationObserver
+		// timing quirk, possibly this simply hadn't redeployed yet for that
+		// specific test). A redundant poll for the rest of the page's life
+		// costs nothing and doesn't depend on the observer to have caught the
+		// mutation in the first place.
+		setInterval(checkAndClear, 1000);
+	}
+
+	// On-demand snapshot of exactly the dimensions/computed-style values that
+	// matter for "is something clipping/trapping this page's scroll," captured
+	// at the moment of a tap rather than only at on_page_load's startup --
+	// the freeze only shows up several seconds in, after the client has
+	// already tried to scroll, so the startup-only checkpoints above can't
+	// see it. Call twice per repro (right after load, and again once frozen)
+	// so the two snapshots can be diffed.
+	function describeStyle(el, props) {
+		if (!el) return "(not found)";
+		var cs = getComputedStyle(el);
+		return props.map(function (p) { return p + "=" + cs[p]; }).join(" ");
+	}
+
+	function probeNow() {
+		logStep("════ PROBE @ " + new Date().toLocaleTimeString() + " ════");
+		logStep(
+			"viewport: innerWidth=" + window.innerWidth +
+			" innerHeight=" + window.innerHeight +
+			" devicePixelRatio=" + window.devicePixelRatio
+		);
+
+		var mainSection = document.querySelector(".main-section");
+		logStep(
+			mainSection
+				? ".main-section: scrollHeight=" + mainSection.scrollHeight +
+				  " clientHeight=" + mainSection.clientHeight +
+				  " scrollTop=" + mainSection.scrollTop +
+				  " | " + describeStyle(mainSection, ["overflow", "overflowY", "height", "position"])
+				: ".main-section: NOT FOUND"
+		);
+
+		var oppDb = document.querySelector(".opp-db");
+		logStep(
+			oppDb
+				? ".opp-db: scrollHeight=" + oppDb.scrollHeight +
+				  " offsetHeight=" + oppDb.offsetHeight +
+				  " | " + describeStyle(oppDb, ["overflow", "height", "position", "maxHeight"])
+				: ".opp-db: NOT FOUND"
+		);
+
+		logStep("html: " + describeStyle(document.documentElement, ["overflow", "height"]));
+		logStep(
+			"body: " + describeStyle(document.body, ["overflow", "height"]) +
+			' | inline style.overflow="' + document.body.style.overflow + '"' +
+			' | className="' + document.body.className + '"'
+		);
+		logStep(
+			"dialog state: cur_dialog=" + !!window.cur_dialog +
+			" open_dialogs.length=" + ((frappe.ui && frappe.ui.open_dialogs && frappe.ui.open_dialogs.length) || 0) +
+			" .modal-backdrop count=" + document.querySelectorAll(".modal-backdrop").length +
+			" .modal.show/.in count=" + document.querySelectorAll(".modal.show, .modal.in").length
+		);
+
+		["opp-pipeline-chart", "opp-bar-chart"].forEach(function (canvasId) {
+			var canvas = document.getElementById(canvasId);
+			var wrapperEl = canvas && canvas.parentElement;
+			logStep(
+				wrapperEl
+					? "#" + canvasId + " wrapper: offsetWidth=" + wrapperEl.offsetWidth +
+					  " offsetHeight=" + wrapperEl.offsetHeight +
+					  ' inlineStyle="' + wrapperEl.getAttribute("style") + '"'
+					: "#" + canvasId + " wrapper: NOT FOUND"
+			);
+		});
+
+		if (oppDb) {
+			var zeroSized = [];
+			oppDb.querySelectorAll("*").forEach(function (el) {
+				if (el.children.length > 0 && (el.offsetWidth === 0 || el.offsetHeight === 0)) {
+					zeroSized.push(
+						el.tagName + (el.className ? "." + String(el.className).replace(/\s+/g, ".") : "") +
+						" (w=" + el.offsetWidth + " h=" + el.offsetHeight + ")"
+					);
+				}
+			});
+			logStep(
+				zeroSized.length
+					? "ZERO-SIZED elements with children (" + zeroSized.length + "): " + zeroSized.slice(0, 10).join(" | ")
+					: "no zero-sized elements with children found inside .opp-db"
+			);
+		}
+
+		logStep("════ PROBE END ════");
+	}
+
+	// Safety net: many freezes/silent-death bugs turn out to be an uncaught
+	// error or unhandled promise rejection partway through a chain that
+	// otherwise looks fine step-by-step -- catch those globally too, not just
+	// the explicit checkpoints below. Registered here, at the very top of the
+	// IIFE, so they're active even before on_page_load itself runs.
+	window.addEventListener("error", function (e) {
+		logStep("UNCAUGHT ERROR: " + e.message + " @ " + e.filename + ":" + e.lineno);
+	});
+	window.addEventListener("unhandledrejection", function (e) {
+		logStep("UNHANDLED REJECTION: " + (e.reason && e.reason.message || e.reason));
+	});
+
 	// ── Formatters ─────────────────────────────────────────────────────────────
 	function fmtNum(n) {
 		return Number(n || 0).toLocaleString("en-US", { maximumFractionDigits: 0 });
@@ -571,6 +787,21 @@
 .opp-empty {
   text-align: center; padding: 32px; color: #9ca3af; font-size: 13px;
 }
+/* Loading indicator for a data reload -- deliberately just an in-place swap
+   of $body's own innerHTML (position:static, no fixed positioning, nothing
+   touching document.body itself), NOT frappe.dom.freeze() or any Dialog.
+   Keeping it this way is the point: it can't be the thing that gets body's
+   scroll stuck, since it never reaches outside its own container. */
+.opp-loading {
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 60px 20px; color: #9ca3af; font-size: 14px;
+}
+.opp-spinner {
+  width: 28px; height: 28px; border-radius: 50%;
+  border: 3px solid #e5e7eb; border-top-color: #6366f1;
+  animation: opp-spin 0.8s linear infinite;
+}
+@keyframes opp-spin { to { transform: rotate(360deg); } }
 /* Scroll-progress indicator: hidden by default, shown only at <=560px (see
    that media query below) and explicitly re-hidden for print further down. */
 .opp-scroll-track, .opp-scroll-thumb { display: none; }
@@ -624,7 +855,13 @@
      attach_axis_lock_scroll() below no way to tell "genuinely needs
      horizontal scroll" from "never did," so every vertical drag on most of
      the page would go through its manual (momentum-free) scroll instead of
-     the browser's normal smooth one. */
+     the browser's normal smooth one.
+     KEEP THIS SELECTOR IDENTICAL to the regionSelector passed to
+     attach_axis_lock_scroll(wrapper, ...) at the on_page_load call site
+     near the bottom of this file -- any element this rule restricts with
+     touch-action:pan-x needs attach_axis_lock_scroll() to also recognize it
+     via regionSelector, or a vertical drag starting on it silently does
+     nothing (no error, just an inert page) instead of scrolling. */
   .opp-panel:has(.opp-table) { overflow-x: auto; touch-action: pan-x; overscroll-behavior-x: contain; }
   .opp-table { white-space: nowrap; }
 
@@ -1266,6 +1503,43 @@
 		};
 	}
 
+	// On a cold/direct load of this route (URL typed/pasted/bookmarked as the
+	// tab's first page, not navigated to from inside the desk app), the
+	// surrounding desk shell -- including .main-section -- can still be mid-
+	// assembly at the exact moment on_page_load fires, since that's async
+	// framework startup, not something this page's own script controls. A
+	// one-shot document.querySelector(".main-section") at setup time can
+	// therefore silently find nothing on that specific load path (reproduced
+	// only via a cold load, never via SPA-internal navigation, which is
+	// exactly the signature of a startup race rather than a real absence) --
+	// and both setup_scroll_indicator() and attach_axis_lock_scroll() below
+	// used to just bail out when that happened, with no console error,
+	// silently reintroducing the original scroll-lock bug on that one load
+	// path. Polling via rAF (not a fixed setTimeout, which would be a guess
+	// at "long enough" that's fragile across devices/network speeds) instead
+	// keeps trying until the element genuinely exists, with a 5s cap so a
+	// truly broken page fails loudly (console.warn) instead of retrying
+	// forever unnoticed.
+	// retryCount/startedAt params are TEMP DIAGNOSTIC only (see logStep above) --
+	// remove along with the logStep calls below once this is root-caused.
+	function whenScrollElReady(cb, deadline, retryCount, startedAt) {
+		startedAt = startedAt || Date.now();
+		deadline = deadline || (startedAt + 5000);
+		retryCount = retryCount || 0;
+		var el = document.querySelector(".main-section");
+		if (el) {
+			logStep(".main-section found after " + retryCount + " retries / " + (Date.now() - startedAt) + "ms");
+			return cb(el);
+		}
+		if (Date.now() > deadline) {
+			logStep(".main-section NEVER FOUND after " + retryCount + " retries / " + (Date.now() - startedAt) + "ms -- giving up");
+			console.warn("opportunity_analytics_report: .main-section never appeared; scroll indicator/axis-lock fix not attached.");
+			return;
+		}
+		logStep(".main-section not found, retry " + retryCount);
+		requestAnimationFrame(function () { whenScrollElReady(cb, deadline, retryCount + 1, startedAt); });
+	}
+
 	// Frappe desk pages don't unmount on navigation -- frappe.container.
 	// change_to() (frappe/public/js/frappe/views/container.js) just hides the
 	// previous page's wrapper and shows this one, triggering jQuery "hide"/
@@ -1278,38 +1552,37 @@
 	// yet), and left attached after navigating away it would keep
 	// recalculating on every OTHER page's scrolling for no reason.
 	function setup_scroll_indicator(wrapper) {
-		var scrollEl = document.querySelector(".main-section");
-		if (!scrollEl) return;
+		whenScrollElReady(function (scrollEl) {
+			var $track = $('<div class="opp-scroll-track"></div>').appendTo(wrapper);
+			var $thumb = $('<div class="opp-scroll-thumb"></div>').appendTo($track);
 
-		var $track = $('<div class="opp-scroll-track"></div>').appendTo(wrapper);
-		var $thumb = $('<div class="opp-scroll-thumb"></div>').appendTo($track);
+			function update() {
+				var trackH = $track[0].clientHeight;
+				if (!trackH) return;
+				var scrollableH = scrollEl.scrollHeight - scrollEl.clientHeight;
+				var pct = scrollableH > 0 ? scrollEl.scrollTop / scrollableH : 0;
+				// Measuring the track's OWN clientHeight here (rather than
+				// scrollEl's) keeps the thumb pixel-accurate even when the two
+				// briefly disagree -- e.g. .main-section's 100vh can measure
+				// taller than the real visible viewport while a mobile browser's
+				// address bar is mid-collapse.
+				var thumbH = Math.min(Math.max(trackH * 0.18, 40), trackH);
+				$thumb.css({ height: thumbH + "px", top: (pct * (trackH - thumbH)) + "px" });
+			}
 
-		function update() {
-			var trackH = $track[0].clientHeight;
-			if (!trackH) return;
-			var scrollableH = scrollEl.scrollHeight - scrollEl.clientHeight;
-			var pct = scrollableH > 0 ? scrollEl.scrollTop / scrollableH : 0;
-			// Measuring the track's OWN clientHeight here (rather than
-			// scrollEl's) keeps the thumb pixel-accurate even when the two
-			// briefly disagree -- e.g. .main-section's 100vh can measure
-			// taller than the real visible viewport while a mobile browser's
-			// address bar is mid-collapse.
-			var thumbH = Math.min(Math.max(trackH * 0.18, 40), trackH);
-			$thumb.css({ height: thumbH + "px", top: (pct * (trackH - thumbH)) + "px" });
-		}
+			var throttled_update = raf_throttle(update);
 
-		var throttled_update = raf_throttle(update);
+			function attach() {
+				scrollEl.addEventListener("scroll", throttled_update, { passive: true });
+				update();
+			}
+			function detach() {
+				scrollEl.removeEventListener("scroll", throttled_update);
+			}
 
-		function attach() {
-			scrollEl.addEventListener("scroll", throttled_update, { passive: true });
-			update();
-		}
-		function detach() {
-			scrollEl.removeEventListener("scroll", throttled_update);
-		}
-
-		$(wrapper).on("show", attach);
-		$(wrapper).on("hide", detach);
+			$(wrapper).on("show", attach);
+			$(wrapper).on("hide", detach);
+		});
 	}
 
 	// ── Vertical-swipe-blocked-on-horizontal-scroll fix (approved design) ───────
@@ -1334,70 +1607,104 @@
 	// scrollable ancestor fresh on every gesture, so this keeps working after
 	// any re-render without re-attaching anything.
 	function attach_axis_lock_scroll(wrapper, regionSelector) {
-		var scrollEl = document.querySelector(".main-section");
-		if (!scrollEl) return;
+		whenScrollElReady(function (scrollEl) {
+			var DEAD_ZONE = 6;
+			var state = null;
 
-		var DEAD_ZONE = 6;
-		var state = null;
+			// passive: false is required for preventDefault() below to actually
+			// suppress the browser's own touch-action-driven handling once the
+			// axis locks to "y" -- but a non-passive listener registered
+			// unconditionally on `wrapper` (the whole page) would force the
+			// browser to run this handler synchronously, and wait to see if
+			// preventDefault() gets called, for EVERY touch move anywhere on the
+			// page, even over cards that never match regionSelector -- that's
+			// what caused scrolling from a card to feel janky. Only attaching it
+			// for the duration of a gesture that actually started in a matching
+			// region (added in pointerdown below, removed in reset()) keeps every
+			// other touch move on the page fully native/passive.
+			// TEMP DIAGNOSTIC: logStep calls in this function/handler are for the
+			// cold-load-freeze investigation -- remove along with the rest of the
+			// overlay once that's root-caused.
+			function onPointerMove(e) {
+				if (!state || e.pointerId !== state.pointerId) return;
 
-		// passive: false is required for preventDefault() below to actually
-		// suppress the browser's own touch-action-driven handling once the
-		// axis locks to "y" -- but a non-passive listener registered
-		// unconditionally on `wrapper` (the whole page) would force the
-		// browser to run this handler synchronously, and wait to see if
-		// preventDefault() gets called, for EVERY touch move anywhere on the
-		// page, even over cards that never match regionSelector -- that's
-		// what caused scrolling from a card to feel janky. Only attaching it
-		// for the duration of a gesture that actually started in a matching
-		// region (added in pointerdown below, removed in reset()) keeps every
-		// other touch move on the page fully native/passive.
-		function onPointerMove(e) {
-			if (!state || e.pointerId !== state.pointerId) return;
+				if (!state.axis) {
+					var dx = e.clientX - state.startX;
+					var dy = e.clientY - state.startY;
+					if (Math.abs(dx) < DEAD_ZONE && Math.abs(dy) < DEAD_ZONE) return;
+					state.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+					logStep("onPointerMove: axis resolved to '" + state.axis + "' (pointerId=" + e.pointerId + ")");
+				}
 
-			if (!state.axis) {
-				var dx = e.clientX - state.startX;
-				var dy = e.clientY - state.startY;
-				if (Math.abs(dx) < DEAD_ZONE && Math.abs(dy) < DEAD_ZONE) return;
-				state.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+				if (state.axis === "y") {
+					var before = scrollEl.scrollTop;
+					e.preventDefault();
+					scrollEl.scrollTop -= e.clientY - state.lastY;
+					state.lastY = e.clientY;
+					logStep(
+						"onPointerMove y-axis: scrollTop " + before + " -> " + scrollEl.scrollTop +
+						(before === scrollEl.scrollTop ? " (UNCHANGED -- scroll did not actually move)" : "")
+					);
+				}
+				// axis === "x": do nothing -- native overflow-x + touch-action:pan-x
+				// already handles it exactly as today.
 			}
 
-			if (state.axis === "y") {
-				e.preventDefault();
-				scrollEl.scrollTop -= e.clientY - state.lastY;
-				state.lastY = e.clientY;
-			}
-			// axis === "x": do nothing -- native overflow-x + touch-action:pan-x
-			// already handles it exactly as today.
-		}
+			wrapper.addEventListener("pointerdown", function (e) {
+				if (e.pointerType !== "touch") return;
+				var region = e.target.closest(regionSelector);
+				var targetDesc = e.target.tagName + (e.target.className ? "." + String(e.target.className).replace(/\s+/g, ".") : "");
+				logStep(
+					"pointerdown: pointerId=" + e.pointerId + " target=" + targetDesc +
+					" regionMatch=" + !!region
+				);
+				if (!region) return;
+				state = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, lastY: e.clientY, axis: null };
+				wrapper.addEventListener("pointermove", onPointerMove, { passive: false });
+			});
 
-		wrapper.addEventListener("pointerdown", function (e) {
-			if (e.pointerType !== "touch") return;
-			var region = e.target.closest(regionSelector);
-			if (!region) return;
-			state = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, lastY: e.clientY, axis: null };
-			wrapper.addEventListener("pointermove", onPointerMove, { passive: false });
+			function reset(e) {
+				if (!state || e.pointerId !== state.pointerId) return;
+				state = null;
+				wrapper.removeEventListener("pointermove", onPointerMove);
+			}
+			wrapper.addEventListener("pointerup", reset);
+			wrapper.addEventListener("pointercancel", reset);
+			wrapper.addEventListener("pointerleave", reset);
 		});
-
-		function reset(e) {
-			if (!state || e.pointerId !== state.pointerId) return;
-			state = null;
-			wrapper.removeEventListener("pointermove", onPointerMove);
-		}
-		wrapper.addEventListener("pointerup", reset);
-		wrapper.addEventListener("pointercancel", reset);
-		wrapper.addEventListener("pointerleave", reset);
 	}
 
 	// ── Page entry point ─────────────────────────────────────────────────────────
 	frappe.pages["opportunity-analytics-report"].on_page_load = function (wrapper) {
+		logStep("on_page_load start");
+		logStep(
+			"env: UA=" + navigator.userAgent +
+			" | readyState=" + document.readyState +
+			" | .main-section present at start=" + !!document.querySelector(".main-section") +
+			" | performance.now=" + performance.now().toFixed(0)
+		);
+		logStep("wrapper received: truthy=" + !!wrapper + " isConnected=" + !!(wrapper && wrapper.isConnected));
+
+		clearStuckBodyOverflowLock();
+
 		var page = frappe.ui.make_app_page({
 			parent: wrapper,
 			title: __("Opportunity Analytics Report"),
 			single_column: true,
 		});
 
+		logStep("before setup_scroll_indicator");
 		setup_scroll_indicator(wrapper);
+		logStep("after setup_scroll_indicator returned");
+
+		logStep("before attach_axis_lock_scroll");
+		// KEEP THIS SELECTOR IDENTICAL to the touch-action:pan-x scope in
+		// injectStyles() above (.opp-chart-scroll, .opp-panel:has(.opp-table))
+		// -- if that CSS selector ever changes without this one following, any
+		// newly-restricted element goes right back to silently swallowing
+		// vertical drags with no error, just an inert page.
 		attach_axis_lock_scroll(wrapper, ".opp-chart-scroll, .opp-panel:has(.opp-table)");
+		logStep("after attach_axis_lock_scroll returned");
 
 		page.add_action_item(__("Refresh"), function () { loadData(); });
 		page.add_action_item(__("Export to Excel"), function () { exportToExcel(lastData, filters); });
@@ -1407,11 +1714,27 @@
 		var filters  = { department: "all", territory: "all", sales_stage: "all", sales_stage_1: "all", industry: "all", sub_industry: "all" };
 		var filterBarHTML = ""; // built after get_filter_options
 		var lastData = null; // most recently rendered data, kept for Export to Excel
+		// Bumped on every loadData() call, captured in each request's closure --
+		// if a user changes filters again before the previous get_dashboard_data
+		// call has returned, that older call's response is a stale answer to a
+		// question nobody's asking anymore by the time it arrives, and rendering
+		// it would overwrite whatever the newer (still in-flight or already-
+		// rendered) request produced. Not confirmed to be related to the body-
+		// overflow freeze investigated separately (see clearStuckBodyOverflowLock
+		// above) -- this is a general data-consistency hygiene fix, kept
+		// independent of that.
+		var loadDataRequestToken = 0;
+		var applyFiltersDebounceTimer = null;
 
 		function applyFilters() {
+			// Chip/active-select UI feedback stays instant; only the actual data
+			// reload is debounced, so picking Department then Territory then
+			// Sales Stage within a couple hundred ms fires ONE get_dashboard_data
+			// call instead of three overlapping ones.
 			updateFilterChips(filters);
 			markActiveSelects(filters);
-			loadData();
+			clearTimeout(applyFiltersDebounceTimer);
+			applyFiltersDebounceTimer = setTimeout(loadData, 250);
 		}
 
 		function bindFilterListeners() {
@@ -1485,24 +1808,30 @@
 		}
 
 		function loadData() {
+			logStep("loadData() started");
+			var requestToken = ++loadDataRequestToken;
 			// Keep filter bar visible during reload, only swap inner sections
+			var loadingHTML = '<div class="opp-loading"><div class="opp-spinner"></div>' + __("Loading…") + "</div>";
 			var existingBar = $body.find(".opp-filter-bar");
 			if (existingBar.length && filterBarHTML) {
 				// Only show spinner below the filter bar
 				existingBar.nextAll().remove();
-				existingBar.after(
-					'<div style="padding:60px;text-align:center;color:#9ca3af;font-size:14px">' +
-					__("Loading…") + "</div>"
-				);
+				existingBar.after(loadingHTML);
 			} else {
-				$body.html(
-					'<div style="padding:80px;text-align:center;color:#9ca3af;font-size:14px">' +
-					__("Loading…") + "</div>"
-				);
+				$body.html(loadingHTML);
 			}
 
+			logStep("get_dashboard_data AJAX call starting (token=" + requestToken + ")");
 			frappe.call({
 				method: "masar_haus.masar_haus.page.opportunity_analytics_report.opportunity_analytics_report.get_dashboard_data",
+				// Explicit, not relying on the default (which is already falsy here
+				// -- verified against frappe/public/js/frappe/request.js: opts.freeze
+				// only ever becomes true if this option or args.freeze says so, and
+				// neither did). frappe.dom.freeze() itself doesn't even touch body's
+				// scroll (see clearStuckBodyOverflowLock() above for what actually
+				// does) -- this is about never giving it a reason to be involved at
+				// all, not about a behavior change from what was already happening.
+				freeze: false,
 				args: {
 					department: filters.department,
 					territory: filters.territory,
@@ -1512,24 +1841,50 @@
 					sub_industry: filters.sub_industry,
 				},
 				callback: function (r) {
-					if (!r.message) return;
+					logStep("get_dashboard_data AJAX success callback fired (token=" + requestToken + ")");
+					// The debounce above already coalesces same-tick filter changes
+					// into one call, but this still covers a slower case it can't:
+					// two calls both in flight (e.g. one already past the debounce
+					// window when a further filter change starts a second), where
+					// only the SECOND (latest) response should ever get rendered.
+					if (requestToken !== loadDataRequestToken) {
+						logStep("get_dashboard_data: stale response (token=" + requestToken + ", current=" + loadDataRequestToken + ") -- discarding");
+						return;
+					}
+					if (!r.message) {
+						logStep("get_dashboard_data: r.message is falsy -- aborting render");
+						return;
+					}
 					lastData = r.message;
+					logStep("renderDashboard() called");
 					renderDashboard($body, r.message, filterBarHTML);
+					logStep("renderDashboard() finished");
 					bindFilterListeners();
+					logStep("filters bound");
 					updateFilterChips(filters);
 					markActiveSelects(filters);
+				},
+				error: function (err) {
+					logStep("get_dashboard_data AJAX ERROR (token=" + requestToken + "): " + JSON.stringify(err));
 				},
 			});
 		}
 
 		// Bootstrap: load filter options first, then data
+		logStep("get_filter_options AJAX call starting");
 		frappe.call({
 			method: "masar_haus.masar_haus.page.opportunity_analytics_report.opportunity_analytics_report.get_filter_options",
+			freeze: false, // explicit, see the note on the get_dashboard_data call above
 			callback: function (r) {
+				logStep("get_filter_options AJAX success callback fired");
 				if (r.message) {
 					filterBarHTML = buildFilterBarHTML(r.message);
 				}
+				logStep("loadData() called");
 				loadData();
+			},
+			error: function (err) {
+				logStep("get_filter_options AJAX ERROR: " + JSON.stringify(err));
 			},
 		});
 	};

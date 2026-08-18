@@ -151,6 +151,30 @@
 		return window.innerWidth <= 900;
 	}
 
+	// On a cold/direct load of a desk route (URL typed/pasted/bookmarked as
+	// the tab's first page, not navigated to from inside the desk app), the
+	// surrounding desk shell -- including .main-section -- can still be mid-
+	// assembly at the exact moment this bundle's setup code runs, since
+	// that's async framework startup, not something this file controls. A
+	// one-shot document.querySelector(".main-section") can therefore
+	// silently find nothing on that specific load path (reproduces only via
+	// a cold load, never via SPA-internal navigation -- the signature of a
+	// startup race, not a real absence). Polling via rAF (not a fixed
+	// setTimeout, which would be a guess at "long enough" that's fragile
+	// across devices/network speeds) keeps trying until the element
+	// genuinely exists, with a 5s cap so a truly broken page fails loudly
+	// (console.warn) instead of retrying forever unnoticed.
+	function whenScrollElReady(cb, deadline) {
+		deadline = deadline || (Date.now() + 5000);
+		const el = document.querySelector(".main-section");
+		if (el) return cb(el);
+		if (Date.now() > deadline) {
+			console.warn("masar_haus.bundle: .main-section never appeared; scroll indicator/axis-lock fix not attached.");
+			return;
+		}
+		requestAnimationFrame(function () { whenScrollElReady(cb, deadline); });
+	}
+
 	// Lets a vertical drag scroll the page even when it starts on a
 	// horizontally-scrollable region (.masar-chart-scroll, touch-action:
 	// pan-x -- see masar_haus.bundle.scss). touch-action alone can't tell "this
@@ -166,54 +190,53 @@
 	// own) via the one call site in ensure_scrollable_bar_chart() below,
 	// rather than duplicating this per chart.
 	function attach_axis_lock_scroll(el) {
-		const scrollEl = document.querySelector(".main-section");
-		if (!scrollEl) return;
+		whenScrollElReady(function (scrollEl) {
+			const DEAD_ZONE = 6;
+			let state = null;
 
-		const DEAD_ZONE = 6;
-		let state = null;
+			// passive: false is required for preventDefault() below to actually
+			// suppress the browser's own touch-action-driven handling once the
+			// axis locks to "y" -- but a non-passive listener left registered the
+			// whole time would force the browser to run this handler
+			// synchronously, and wait to see if preventDefault() gets called, for
+			// every touch move over this element, even ones that never end up
+			// needing axis-locking. Only attaching it for the duration of an
+			// actual gesture (added in pointerdown below, removed in reset())
+			// keeps everything else fully native/passive.
+			function onPointerMove(e) {
+				if (!state || e.pointerId !== state.pointerId) return;
 
-		// passive: false is required for preventDefault() below to actually
-		// suppress the browser's own touch-action-driven handling once the
-		// axis locks to "y" -- but a non-passive listener left registered the
-		// whole time would force the browser to run this handler
-		// synchronously, and wait to see if preventDefault() gets called, for
-		// every touch move over this element, even ones that never end up
-		// needing axis-locking. Only attaching it for the duration of an
-		// actual gesture (added in pointerdown below, removed in reset())
-		// keeps everything else fully native/passive.
-		function onPointerMove(e) {
-			if (!state || e.pointerId !== state.pointerId) return;
+				if (!state.axis) {
+					const dx = e.clientX - state.startX;
+					const dy = e.clientY - state.startY;
+					if (Math.abs(dx) < DEAD_ZONE && Math.abs(dy) < DEAD_ZONE) return;
+					state.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+				}
 
-			if (!state.axis) {
-				const dx = e.clientX - state.startX;
-				const dy = e.clientY - state.startY;
-				if (Math.abs(dx) < DEAD_ZONE && Math.abs(dy) < DEAD_ZONE) return;
-				state.axis = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+				if (state.axis === "y") {
+					e.preventDefault();
+					scrollEl.scrollTop -= e.clientY - state.lastY;
+					state.lastY = e.clientY;
+				}
+				// axis === "x": do nothing -- native overflow-x + touch-action:pan-x
+				// already handles it exactly as today.
 			}
 
-			if (state.axis === "y") {
-				e.preventDefault();
-				scrollEl.scrollTop -= e.clientY - state.lastY;
-				state.lastY = e.clientY;
-			}
-			// axis === "x": do nothing -- native overflow-x + touch-action:pan-x
-			// already handles it exactly as today.
-		}
+			el.addEventListener("pointerdown", function (e) {
+				if (e.pointerType !== "touch") return;
+				state = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, lastY: e.clientY, axis: null };
+				el.addEventListener("pointermove", onPointerMove, { passive: false });
+			});
 
-		el.addEventListener("pointerdown", function (e) {
-			if (e.pointerType !== "touch") return;
-			state = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, lastY: e.clientY, axis: null };
-			el.addEventListener("pointermove", onPointerMove, { passive: false });
+			function reset(e) {
+				if (!state || e.pointerId !== state.pointerId) return;
+				state = null;
+				el.removeEventListener("pointermove", onPointerMove);
+			}
+			el.addEventListener("pointerup", reset);
+			el.addEventListener("pointercancel", reset);
+			el.addEventListener("pointerleave", reset);
 		});
-
-		function reset(e) {
-			if (!state || e.pointerId !== state.pointerId) return;
-			state = null;
-			el.removeEventListener("pointermove", onPointerMove);
-		}
-		el.addEventListener("pointerup", reset);
-		el.addEventListener("pointercancel", reset);
-		el.addEventListener("pointerleave", reset);
 	}
 
 	// frappe-charts truncates x-axis labels based on a max-chars budget of
@@ -442,6 +465,11 @@
 		// shared by every desk route -- confirmed directly against a live
 		// on-device diagnostic during the Analytics Report mobile-scroll
 		// investigation, so the same container applies here unchanged.
+		// No whenScrollElReady() needed here (unlike attach_scroll_indicator()
+		// and attach_axis_lock_scroll() below) -- this function itself gets
+		// re-invoked on every scroll/mutation, so a cold-load race where
+		// .main-section isn't there yet on one call just self-corrects the
+		// next time this runs, rather than permanently missing anything.
 		const scrollEl = document.querySelector(".main-section");
 		if (!scrollEl) return;
 		const trackH = $scroll_track[0].clientHeight;
@@ -472,10 +500,17 @@
 	const throttled_update_scroll_indicator = raf_throttle(update_scroll_indicator);
 
 	function attach_scroll_indicator() {
-		const scrollEl = document.querySelector(".main-section");
-		if (scrollEl) {
+		// Unlike update_scroll_indicator()'s own internal lookup above, this one
+		// runs exactly once at startup -- on a cold/direct load where .main-
+		// section isn't in the DOM yet at that moment, a plain
+		// querySelector+bail here would permanently skip ever attaching the
+		// scroll listener for the rest of the page's life (the MutationObserver
+		// below doesn't need .main-section itself, so it'd still run, but the
+		// thumb would then only ever reposition on a DOM mutation, never on an
+		// actual scroll).
+		whenScrollElReady(function (scrollEl) {
 			scrollEl.addEventListener("scroll", throttled_update_scroll_indicator, { passive: true });
-		}
+		});
 
 		// Widgets (and therefore data-chart-title) render asynchronously, and
 		// the page may already be scrolled from a previous visit, so a scroll
@@ -500,4 +535,40 @@
 	} else {
 		document.addEventListener("DOMContentLoaded", attach_scroll_indicator);
 	}
+
+	// Precautionary fix for the same Frappe-core body-scroll-lock bug
+	// diagnosed and fixed on the Opportunity Analytics Report page (see that
+	// file for the full investigation). Two confirmed mechanisms, both in
+	// Frappe core and shared by every desk page, leave document.body.style.
+	// overflow stuck at "hidden" with nothing to undo it: (1) frappe.ui.
+	// Dialog's hide_scrollbar() (frappe/public/js/frappe/ui/dialog.js), wired
+	// to Bootstrap's shown.bs.modal/hide.bs.modal events, stuck if a hide
+	// transition doesn't fire; (2) frappe.ui.Page's mobile sidebar-toggle
+	// button (CSS-hidden at >=992px, i.e. only exists on mobile) calling
+	// sidebar.set_height() unconditionally on every click (frappe/public/js/
+	// frappe/ui/sidebar/sidebar.js), with no restore anywhere in that file's
+	// open()/close()/toggle_width(). This dashboard was never architecturally
+	// immune to either -- it just hadn't been tested with the exact
+	// triggering interactions yet. Gated to only ACT while this dashboard's
+	// own widgets are in the DOM (is_on_opportunity_dashboard(), same check
+	// the rest of this file already uses), so it never touches unrelated
+	// desk pages this bundle also happens to load on.
+	function clearStuckBodyOverflowLock() {
+		if (!is_on_opportunity_dashboard()) return;
+		var noDialogOpen =
+			!window.cur_dialog &&
+			!(frappe.ui.open_dialogs && frappe.ui.open_dialogs.length) &&
+			!document.querySelector(".modal-backdrop, .modal.show, .modal.in");
+		if (noDialogOpen && document.body.style.overflow === "hidden") {
+			console.warn(
+				"masar_haus.bundle: body.style.overflow was stuck at 'hidden' with no dialog open " +
+				"on the Opportunity Dashboard -- clearing it"
+			);
+			document.body.style.overflow = "";
+		}
+	}
+	new MutationObserver(clearStuckBodyOverflowLock).observe(document.body, {
+		attributes: true,
+		attributeFilter: ["style", "class"],
+	});
 })();
