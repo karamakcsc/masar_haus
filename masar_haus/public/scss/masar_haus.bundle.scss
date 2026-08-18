@@ -109,6 +109,22 @@
 	display: none;
 }
 
+/* CSS Grid items default to a content-based automatic minimum width -- same
+   issue as the donuts' min-width:0 above, just for these two. Unconditional
+   (not mobile-only) because ensure_scrollable_bar_chart() (masar_haus.
+   bundle.js) can widen either chart's wrapper at ANY viewport width now (the
+   Pipeline chart always needs real per-category width since sales stage
+   names are free text and can run long even on desktop; Monthly needs it up
+   to 900px, wider than this rule used to cover) -- without this, whichever
+   width the JS decides to widen at, the grid TRACK grows to fit the wrapper
+   instead of staying put and scrolling internally, so the previous mobile-
+   only version of this rule left exactly the gap where the JS fix ran but
+   this didn't, and frappe-charts kept truncating labels anyway. */
+.widget[data-chart-title="Monthly Live Opportunity Value"],
+.widget[data-chart-title="Opportunity Pipeline by Sales Stage"] {
+	min-width: 0;
+}
+
 /* Status donuts: replace frappe-charts' built-in horizontal legend (native
    legend disabled via showLegend:0, see masar_haus.bundle.js) with our own
    legend stacked above the ring.
@@ -237,15 +253,9 @@
 	   count -- font-size has no effect on that calculation, only real width
 	   does. ensure_scrollable_bar_chart() (masar_haus.bundle.js) gives the
 	   measured element real per-category width so labels mostly fit, wrapped
-	   in a horizontally-scrollable box for whatever doesn't.
-	   min-width:0 on the chart's own grid cell is required: CSS Grid items
-	   default to a content-based automatic minimum width, so without this
-	   the widened chart forces the whole grid cell (and with it the page)
-	   wider instead of staying put and scrolling internally. */
-	.widget[data-chart-title="Monthly Live Opportunity Value"],
-	.widget[data-chart-title="Opportunity Pipeline by Sales Stage"] {
-		min-width: 0;
-	}
+	   in a horizontally-scrollable box for whatever doesn't (the matching
+	   min-width:0 grid-item override these two need is unconditional now --
+	   see above -- since the JS can widen them outside this breakpoint too). */
 
 	/* Belt-and-suspenders: clip at the shared charts grid too, so if
 	   anything still escapes containment it's cropped here rather than

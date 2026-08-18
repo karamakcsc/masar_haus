@@ -172,15 +172,16 @@
 		const DEAD_ZONE = 6;
 		let state = null;
 
-		el.addEventListener("pointerdown", function (e) {
-			if (e.pointerType !== "touch") return;
-			state = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, lastY: e.clientY, axis: null };
-		});
-
-		// passive: false is required here -- without it the browser won't let
-		// preventDefault() below actually suppress its own touch-action-driven
-		// handling of the gesture once the axis locks to "y".
-		el.addEventListener("pointermove", function (e) {
+		// passive: false is required for preventDefault() below to actually
+		// suppress the browser's own touch-action-driven handling once the
+		// axis locks to "y" -- but a non-passive listener left registered the
+		// whole time would force the browser to run this handler
+		// synchronously, and wait to see if preventDefault() gets called, for
+		// every touch move over this element, even ones that never end up
+		// needing axis-locking. Only attaching it for the duration of an
+		// actual gesture (added in pointerdown below, removed in reset())
+		// keeps everything else fully native/passive.
+		function onPointerMove(e) {
 			if (!state || e.pointerId !== state.pointerId) return;
 
 			if (!state.axis) {
@@ -197,10 +198,18 @@
 			}
 			// axis === "x": do nothing -- native overflow-x + touch-action:pan-x
 			// already handles it exactly as today.
-		}, { passive: false });
+		}
+
+		el.addEventListener("pointerdown", function (e) {
+			if (e.pointerType !== "touch") return;
+			state = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, lastY: e.clientY, axis: null };
+			el.addEventListener("pointermove", onPointerMove, { passive: false });
+		});
 
 		function reset(e) {
-			if (state && e.pointerId === state.pointerId) state = null;
+			if (!state || e.pointerId !== state.pointerId) return;
+			state = null;
+			el.removeEventListener("pointermove", onPointerMove);
 		}
 		el.addEventListener("pointerup", reset);
 		el.addEventListener("pointercancel", reset);
@@ -208,16 +217,15 @@
 	}
 
 	// frappe-charts truncates x-axis labels based on a max-chars budget of
-	// (this.width / category_count) * 0.6 / 7 -- i.e. it's driven entirely by
-	// the chart's actual rendered pixel width, not by font-size. Give the
-	// measured wrapper real per-category width (130px, matching a
-	// comfortably-legible desktop bar) so frappe-charts computes a much
-	// larger budget and mostly stops truncating, then let the excess (on the
-	// 8-category Pipeline chart in particular) scroll horizontally instead
-	// of being squeezed back down to fit the phone screen.
-	function ensure_scrollable_bar_chart(wrapper, category_count) {
+	// (this.width / category_count) * 0.6 / 7 -- verified directly against
+	// frappe-charts' own source (node_modules/frappe-charts/dist/frappe-
+	// charts.esm.js), not assumed. Give the measured wrapper real
+	// per-category width so frappe-charts computes a much larger budget and
+	// mostly stops truncating, then let the excess scroll horizontally
+	// instead of being squeezed back down to fit the screen.
+	function ensure_scrollable_bar_chart(wrapper, category_count, min_width_per_category) {
 		const $wrapper = $(wrapper);
-		const min_width = Math.max((category_count || 0) * 130, 300);
+		const min_width = Math.max((category_count || 0) * (min_width_per_category || 130), 300);
 		$wrapper.css("min-width", min_width + "px");
 		if (!$wrapper.parent().hasClass("masar-chart-scroll")) {
 			// Only reached when a NEW .masar-chart-scroll is about to be created
@@ -256,8 +264,8 @@
 		const mobile = is_mobile_bar_width();
 		bar_chart_registry.forEach(function (entry) {
 			if (!document.body.contains(entry.wrapper)) return;
-			if (mobile) {
-				ensure_scrollable_bar_chart(entry.wrapper, entry.category_count);
+			if (mobile || entry.always_scroll) {
+				ensure_scrollable_bar_chart(entry.wrapper, entry.category_count, entry.per_category_width);
 			} else {
 				reset_scrollable_bar_chart(entry.wrapper);
 			}
@@ -337,9 +345,32 @@
 				custom_options = Object.assign({}, custom_options, { valuesOverPoints: true });
 				if (custom_options.data && custom_options.data.labels) {
 					const category_count = custom_options.data.labels.length;
-					bar_chart_registry.push({ wrapper: wrapper, category_count: category_count });
-					if (is_mobile_bar_width()) {
-						ensure_scrollable_bar_chart(wrapper, category_count);
+					// Sales stage names are free text set per-business and can run
+					// much longer than the Monthly chart's uniform "Mon YYYY"
+					// labels, so unlike that chart this one needs its
+					// per-category-width fix on every viewport width, not just
+					// mobile -- frappe-charts truncates purely by pixel width
+					// divided by category count, and a handful of long stage
+					// names don't fit even in this widget's normal desktop card
+					// width.
+					const always_scroll = widget_title === "Opportunity Pipeline by Sales Stage";
+					// 130px/category (frappe-charts' ~11-char budget at that width)
+					// was sized for Monthly's short "Mon YYYY" labels -- this
+					// business's actual Sales Stage values run up to 24 characters
+					// ("Proposal to be submitted", verified against live data, not
+					// guessed), which even a *comfortably*-fitting label like
+					// "Prospecting" (11 chars) was only just barely clearing before
+					// getting cut anyway. 300px/category budgets ~26 characters,
+					// comfortably covering the longest real value with margin.
+					const per_category_width = always_scroll ? 300 : 130;
+					bar_chart_registry.push({
+						wrapper: wrapper,
+						category_count: category_count,
+						always_scroll: always_scroll,
+						per_category_width: per_category_width,
+					});
+					if (always_scroll || is_mobile_bar_width()) {
+						ensure_scrollable_bar_chart(wrapper, category_count, per_category_width);
 					}
 				}
 			}

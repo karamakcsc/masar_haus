@@ -74,6 +74,13 @@ Both features, approved-design mockups, applied identically to the Opportunity D
 - Report page: delegated on the page's own stable root (`wrapper`), not the repeatedly-rebuilt `.opp-db` div, so it keeps working after filter-change re-renders without re-attaching anything.
 - Dashboard bundle: attached once per real `.masar-chart-scroll` DOM node, inside the existing "only wrap if not already wrapped" check in `ensure_scrollable_bar_chart()`, so it can't double-attach across the mobile→desktop→mobile resize cycle.
 
+**2026-08-09 — Fix scroll jank and Pipeline chart label truncation**
+
+Two follow-up fixes after live device testing of the above:
+
+- Axis-lock scroll jank: the `pointermove` listener needs `{ passive: false }` for `preventDefault()` to work, but it was registered permanently on the whole page/wrapper. A non-passive listener forces the browser to run it synchronously — and wait to see if `preventDefault` is called — for every touch move anywhere, even over cards that never matched the target region, which is what made scrolling from a card feel janky. Fixed in both `attach_axis_lock_scroll()` copies by only attaching the non-passive `pointermove` listener for the duration of a gesture that actually starts in a matching region (added on `pointerdown`, removed on `pointerup`/`cancel`/`leave`); everywhere else now has zero listener overhead.
+- Opportunity Pipeline by Sales Stage still truncating labels (`.opp-panel:has(.opp-table)` CSS scoping fix + a real `min-width:0` grid-item gap, both also fixed this round): traced frappe-charts' actual truncation formula in its own source (`node_modules/frappe-charts/dist/frappe-charts.esm.js`) rather than trusting an old comment — `max_chars = (width_per_category × 0.6) / 7` — and checked the real Sales Stage values in use, which run up to 24 characters (`"Proposal to be submitted"`). The existing 130px/category width (sized for the Monthly chart's short "Mon YYYY" labels) only budgets ~11 characters, so even short stage names like "Prospecting" were right at the edge of truncating. `ensure_scrollable_bar_chart()` now takes a configurable per-category width; the Pipeline chart specifically gets 300px (~26-character budget), Monthly is untouched.
+
 ### License
 
 mit

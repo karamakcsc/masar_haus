@@ -451,7 +451,7 @@
 	}
 
 	// ── CSS ─────────────────────────────────────────────────────────────────────
-	var CSS_ID = "opp-db-styles-v13";
+	var CSS_ID = "opp-db-styles-v14";
 	function injectStyles() {
 		if (document.getElementById(CSS_ID)) return;
 		var el = document.createElement("style");
@@ -617,8 +617,15 @@
   /* Top-5 tables (Client/Stage/Status/Value) don't have room for all 4
      columns at readable width -- scroll the panel horizontally instead of
      letting cell text wrap into an unreadable stack. Same nested-scroll
-     vertical-gesture-capture risk as the carousels above, so same fix. */
-  .opp-panel { overflow-x: auto; touch-action: pan-x; overscroll-behavior-x: contain; }
+     vertical-gesture-capture risk as the carousels above, so same fix.
+     Scoped to :has(.opp-table) specifically -- .opp-panel is also the class
+     on the Summary/Doughnut/chart cards, none of which have any horizontal
+     content to scroll; applying touch-action:pan-x to those too would give
+     attach_axis_lock_scroll() below no way to tell "genuinely needs
+     horizontal scroll" from "never did," so every vertical drag on most of
+     the page would go through its manual (momentum-free) scroll instead of
+     the browser's normal smooth one. */
+  .opp-panel:has(.opp-table) { overflow-x: auto; touch-action: pan-x; overscroll-behavior-x: contain; }
   .opp-table { white-space: nowrap; }
 
   /* Custom scroll-progress indicator (approved design) -- mobile scrollbars
@@ -1333,17 +1340,18 @@
 		var DEAD_ZONE = 6;
 		var state = null;
 
-		wrapper.addEventListener("pointerdown", function (e) {
-			if (e.pointerType !== "touch") return;
-			var region = e.target.closest(regionSelector);
-			if (!region) return;
-			state = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, lastY: e.clientY, axis: null };
-		});
-
-		// passive: false is required here -- without it the browser won't let
-		// preventDefault() below actually suppress its own touch-action-driven
-		// handling of the gesture once the axis locks to "y".
-		wrapper.addEventListener("pointermove", function (e) {
+		// passive: false is required for preventDefault() below to actually
+		// suppress the browser's own touch-action-driven handling once the
+		// axis locks to "y" -- but a non-passive listener registered
+		// unconditionally on `wrapper` (the whole page) would force the
+		// browser to run this handler synchronously, and wait to see if
+		// preventDefault() gets called, for EVERY touch move anywhere on the
+		// page, even over cards that never match regionSelector -- that's
+		// what caused scrolling from a card to feel janky. Only attaching it
+		// for the duration of a gesture that actually started in a matching
+		// region (added in pointerdown below, removed in reset()) keeps every
+		// other touch move on the page fully native/passive.
+		function onPointerMove(e) {
 			if (!state || e.pointerId !== state.pointerId) return;
 
 			if (!state.axis) {
@@ -1360,10 +1368,20 @@
 			}
 			// axis === "x": do nothing -- native overflow-x + touch-action:pan-x
 			// already handles it exactly as today.
-		}, { passive: false });
+		}
+
+		wrapper.addEventListener("pointerdown", function (e) {
+			if (e.pointerType !== "touch") return;
+			var region = e.target.closest(regionSelector);
+			if (!region) return;
+			state = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, lastY: e.clientY, axis: null };
+			wrapper.addEventListener("pointermove", onPointerMove, { passive: false });
+		});
 
 		function reset(e) {
-			if (state && e.pointerId === state.pointerId) state = null;
+			if (!state || e.pointerId !== state.pointerId) return;
+			state = null;
+			wrapper.removeEventListener("pointermove", onPointerMove);
 		}
 		wrapper.addEventListener("pointerup", reset);
 		wrapper.addEventListener("pointercancel", reset);
@@ -1379,7 +1397,7 @@
 		});
 
 		setup_scroll_indicator(wrapper);
-		attach_axis_lock_scroll(wrapper, ".opp-chart-scroll, .opp-panel");
+		attach_axis_lock_scroll(wrapper, ".opp-chart-scroll, .opp-panel:has(.opp-table)");
 
 		page.add_action_item(__("Refresh"), function () { loadData(); });
 		page.add_action_item(__("Export to Excel"), function () { exportToExcel(lastData, filters); });
